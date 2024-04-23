@@ -34,11 +34,8 @@ func main() {
 			fmt.Println("Failed to read integer:", err)
 			return
 		}
-		// You can use print statements as follows for debugging, they'll be visible when running tests.
-		fmt.Println("Logs from your program will appear here!")
+		fmt.Printf("database page size: %v", pageSize)
 
-		// Uncomment this to pass the first stage
-		// fmt.Printf("database page size: %v", pageSize)
 	default:
 		fmt.Println("Unknown command", command)
 		os.Exit(1)
