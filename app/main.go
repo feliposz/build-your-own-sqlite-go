@@ -1,9 +1,8 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	// Available if you need it!
@@ -12,13 +11,24 @@ import (
 
 // Usage: your_sqlite3.sh sample.db .dbinfo
 func main() {
+	if len(os.Args) < 3 {
+		fmt.Printf("usage: %s <database.db> <command>\n", os.Args[0])
+		os.Exit(1)
+	}
+
 	databaseFilePath := os.Args[1]
 	command := os.Args[2]
 
+	databaseFile, err := os.Open(databaseFilePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	switch command {
 	case ".dbinfo":
-		info := readDBInfo(databaseFilePath)
+		info := readDBInfo(databaseFile)
 		printDbInfo(info)
+		readSchemaInfo(databaseFile, info)
 	default:
 		fmt.Println("Unknown command", command)
 		os.Exit(1)
@@ -26,7 +36,7 @@ func main() {
 }
 
 type DBInfo struct {
-	DatabasePageSize           uint16
+	DatabasePageSize           int
 	WriteFormat                uint8
 	ReadFormat                 uint8
 	ReservedBytes              uint8
@@ -54,16 +64,19 @@ type DBInfo struct {
 	DataVersion                uint32
 }
 
-func readDBInfo(databaseFilePath string) *DBInfo {
+func readBigEndianUint16(b []byte) uint16 {
+	return uint16(b[0])<<8 | uint16(b[1])
+}
 
-	databaseFile, err := os.Open(databaseFilePath)
-	if err != nil {
-		log.Fatal(err)
-	}
+func readBigEndianUint32(b []byte) uint32 {
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func readDBInfo(databaseFile *os.File) *DBInfo {
 
 	header := make([]byte, 100)
 
-	_, err = databaseFile.Read(header)
+	_, err := databaseFile.Read(header)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -73,69 +86,33 @@ func readDBInfo(databaseFilePath string) *DBInfo {
 	}
 
 	var info DBInfo
-	if err := binary.Read(bytes.NewReader(header[16:18]), binary.BigEndian, &info.DatabasePageSize); err != nil {
-		log.Fatal("Failed to read DatabasePageSize:", err)
+
+	pageSize := readBigEndianUint16(header[16:18])
+	info.DatabasePageSize = int(pageSize)
+	if pageSize == 0 {
+		info.DatabasePageSize = 65536
 	}
-	if err := binary.Read(bytes.NewReader(header[18:19]), binary.BigEndian, &info.WriteFormat); err != nil {
-		log.Fatal("Failed to read WriteFormat:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[19:20]), binary.BigEndian, &info.ReadFormat); err != nil {
-		log.Fatal("Failed to read ReadFormat:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[20:21]), binary.BigEndian, &info.ReservedBytes); err != nil {
-		log.Fatal("Failed to read ReservedBytes:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[21:22]), binary.BigEndian, &info.MaxEmbeddedPayloadFraction); err != nil {
-		log.Fatal("Failed to read MaxEmbeddedPayloadFraction:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[22:23]), binary.BigEndian, &info.MinEmbeddedPayloadFraction); err != nil {
-		log.Fatal("Failed to read MinEmbeddedPayloadFraction:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[23:24]), binary.BigEndian, &info.LeafPayloadFraction); err != nil {
-		log.Fatal("Failed to read LeafPayloadFraction:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[24:28]), binary.BigEndian, &info.FileChangeCounter); err != nil {
-		log.Fatal("Failed to read FileChangeCounter:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[28:32]), binary.BigEndian, &info.DatabasePageCount); err != nil {
-		log.Fatal("Failed to read DatabasePageCount:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[32:36]), binary.BigEndian, &info.FirstFreeListPage); err != nil {
-		log.Fatal("Failed to read FirstFreeListPage:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[36:40]), binary.BigEndian, &info.FreelistPageCount); err != nil {
-		log.Fatal("Failed to read FreelistPageCount:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[40:44]), binary.BigEndian, &info.SchemaCookie); err != nil {
-		log.Fatal("Failed to read SchemaCookie:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[44:48]), binary.BigEndian, &info.SchemaFormat); err != nil {
-		log.Fatal("Failed to read SchemaFormat:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[48:52]), binary.BigEndian, &info.DefaultCacheSize); err != nil {
-		log.Fatal("Failed to read DefaultCacheSize:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[52:56]), binary.BigEndian, &info.AutovacuumTopRoot); err != nil {
-		log.Fatal("Failed to read AutovacuumTopRoot:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[56:60]), binary.BigEndian, &info.TextEncoding); err != nil {
-		log.Fatal("Failed to read TextEncoding:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[60:64]), binary.BigEndian, &info.UserVersion); err != nil {
-		log.Fatal("Failed to read UserVersion:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[64:68]), binary.BigEndian, &info.IncrementalVacuum); err != nil {
-		log.Fatal("Failed to read IncrementalVacuum:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[68:72]), binary.BigEndian, &info.ApplicationID); err != nil {
-		log.Fatal("Failed to read ApplicationID:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[92:96]), binary.BigEndian, &info.DataVersion); err != nil {
-		log.Fatal("Failed to read DataVersion:", err)
-	}
-	if err := binary.Read(bytes.NewReader(header[96:100]), binary.BigEndian, &info.SoftwareVersion); err != nil {
-		log.Fatal("Failed to read SoftwareVersion:", err)
-	}
+
+	info.WriteFormat = header[18]
+	info.ReadFormat = header[19]
+	info.ReservedBytes = header[20]
+	info.MaxEmbeddedPayloadFraction = header[21]
+	info.MinEmbeddedPayloadFraction = header[22]
+	info.LeafPayloadFraction = header[23]
+	info.FileChangeCounter = readBigEndianUint32(header[24:28])
+	info.DatabasePageCount = readBigEndianUint32(header[28:32])
+	info.FirstFreeListPage = readBigEndianUint32(header[32:36])
+	info.FreelistPageCount = readBigEndianUint32(header[36:40])
+	info.SchemaCookie = readBigEndianUint32(header[40:44])
+	info.SchemaFormat = readBigEndianUint32(header[44:48])
+	info.DefaultCacheSize = readBigEndianUint32(header[48:52])
+	info.AutovacuumTopRoot = readBigEndianUint32(header[52:56])
+	info.TextEncoding = readBigEndianUint32(header[56:60])
+	info.UserVersion = readBigEndianUint32(header[60:64])
+	info.IncrementalVacuum = readBigEndianUint32(header[64:68])
+	info.ApplicationID = readBigEndianUint32(header[68:72])
+	info.DataVersion = readBigEndianUint32(header[92:96])
+	info.SoftwareVersion = readBigEndianUint32(header[96:100])
 	return &info
 }
 
@@ -171,4 +148,40 @@ func printDbInfo(info *DBInfo) {
 	fmt.Printf("number of views:     %d\n", info.NumberOfViews)
 	fmt.Printf("schema size:         %d\n", info.SchemaSize)
 	fmt.Printf("data version:        %d\n", info.DataVersion)
+}
+
+func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
+	headerSize := 100
+	_, err := databaseFile.Seek(int64(headerSize), io.SeekStart)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	page := make([]byte, info.DatabasePageSize-headerSize)
+	databaseFile.Read(page)
+
+	pageType := page[0]
+	switch pageType {
+	case 0x02:
+	case 0x05:
+	case 0x0a:
+	case 0x0d:
+	default:
+		log.Fatal("invalid page type:", pageType)
+	}
+
+	firstFreeBlock := readBigEndianUint16(page[1:3])
+	cellCount := readBigEndianUint16(page[3:5])
+	startOfCellContentArea := int(readBigEndianUint16(page[5:7]))
+	if startOfCellContentArea == 0 {
+		startOfCellContentArea = 65536
+	}
+	fragmentedFreeBytes := page[7]
+	var rightMostPointer uint32
+	if pageType == 0x02 || pageType == 0x05 {
+		rightMostPointer = readBigEndianUint32(page[5:7])
+	}
+
+	fmt.Println(pageType, firstFreeBlock, cellCount, startOfCellContentArea, fragmentedFreeBytes, rightMostPointer)
+
 }
