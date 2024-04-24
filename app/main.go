@@ -9,6 +9,8 @@ import (
 	// "github.com/xwb1989/sqlparser"
 )
 
+var debugMode bool
+
 // Usage: your_sqlite3.sh sample.db .dbinfo
 func main() {
 	if len(os.Args) < 3 {
@@ -27,8 +29,8 @@ func main() {
 	switch command {
 	case ".dbinfo":
 		info := readDBInfo(databaseFile)
-		printDbInfo(info)
 		readSchemaInfo(databaseFile, info)
+		printDbInfo(info)
 	default:
 		fmt.Println("Unknown command", command)
 		os.Exit(1)
@@ -203,14 +205,16 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 	}
 	unallocatedRegionSize := startOfCellContentArea - (cellPointerArrayOffset + int(cellCount)*2)
 
-	fmt.Printf("---------- page header ----------\n")
-	fmt.Printf("pageType:               %v\n", pageType)
-	fmt.Printf("firstFreeBlock:         %v\n", firstFreeBlock)
-	fmt.Printf("cellCount:              %v\n", cellCount)
-	fmt.Printf("startOfCellContentArea: %v\n", startOfCellContentArea)
-	fmt.Printf("fragmentedFreeBytes:    %v\n", fragmentedFreeBytes)
-	fmt.Printf("rightMostPointer:       %v\n", rightMostPointer)
-	fmt.Printf("unallocatedRegionSize:  %v\n", unallocatedRegionSize)
+	if debugMode {
+		fmt.Printf("---------- page header ----------\n")
+		fmt.Printf("pageType:               %v\n", pageType)
+		fmt.Printf("firstFreeBlock:         %v\n", firstFreeBlock)
+		fmt.Printf("cellCount:              %v\n", cellCount)
+		fmt.Printf("startOfCellContentArea: %v\n", startOfCellContentArea)
+		fmt.Printf("fragmentedFreeBytes:    %v\n", fragmentedFreeBytes)
+		fmt.Printf("rightMostPointer:       %v\n", rightMostPointer)
+		fmt.Printf("unallocatedRegionSize:  %v\n", unallocatedRegionSize)
+	}
 
 	// only considering b-tree table leaf pages for now
 	if pageType != 0x0d {
@@ -219,9 +223,11 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 
 	// reading each cell pointer array
 
-	records := [][]byte{}
+	rawRecords := [][]byte{}
 
-	fmt.Printf("cell\tpointer\tpayload\trowid\tcontent\n")
+	if debugMode {
+		fmt.Printf("cell\tpointer\tpayload\trowid\tcontent\n")
+	}
 	for cell := 0; cell < int(cellCount); cell++ {
 		cellPointerOffset := cellPointerArrayOffset + cell*2
 		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
@@ -232,14 +238,20 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 		offset += bytes
 		// TODO: not handling overflow!
 		content := page[offset : offset+int(payloadSize)]
-		fmt.Printf("%v\t%04x\t%v\t%v\t%q\n", cell, cellPointer, payloadSize, rowid, content)
-		records = append(records, content)
+		if debugMode {
+			fmt.Printf("%v\t%04x\t%v\t%v\t%q\n", cell, cellPointer, payloadSize, rowid, content)
+		}
+		rawRecords = append(rawRecords, content)
 	}
+
+	tableData := [][]any{}
 
 	// parsing record format
 
-	fmt.Printf("record\tdata\n")
-	for i, record := range records {
+	if debugMode {
+		fmt.Printf("record\tdata\n")
+	}
+	for i, record := range rawRecords {
 
 		// determine column type and lenghts from record header
 		recordHeaderSize, bytes := readBigEndianVarint(record)
@@ -308,7 +320,16 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 			}
 			index += typeLength[1]
 		}
-		fmt.Printf("%v\t%#v\n", i, columnData)
+		if debugMode {
+			fmt.Printf("%v\t%#v\n", i, columnData)
+		}
+
+		tableData = append(tableData, columnData)
 	}
 
+	for _, row := range tableData {
+		if row[0] == "table" {
+			info.NumberOfTables++
+		}
+	}
 }
