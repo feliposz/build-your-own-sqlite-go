@@ -5,6 +5,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
+	"strings"
 	// Available if you need it!
 	// "github.com/xwb1989/sqlparser"
 )
@@ -25,6 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer databaseFile.Close()
 
 	info := readDBInfo(databaseFile)
 	readSchemaInfo(databaseFile, info)
@@ -35,8 +38,12 @@ func main() {
 	case ".tables":
 		printTables(info)
 	default:
-		fmt.Println("Unknown command", command)
-		os.Exit(1)
+		if strings.Contains(strings.ToUpper(command), "SELECT") {
+			handleSelect(databaseFile, info, command)
+		} else {
+			fmt.Println("Unknown command", command)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -74,7 +81,7 @@ type SchemaEntry struct {
 	Type      string
 	Name      string
 	TableName string
-	RootPage  int64
+	RootPage  int
 	SQL       string
 }
 
@@ -379,10 +386,11 @@ func getTableData(rawRecords [][]byte) (tableData [][]any) {
 
 func updateSchemaInfo(info *DBInfo, schemaTableData [][]any) {
 	for _, row := range schemaTableData {
+		// TODO: 'table', 'index', 'view', or 'trigger'
 		if row[0] == "table" {
 			info.NumberOfTables++
 		}
-		entry := SchemaEntry{row[0].(string), row[1].(string), row[2].(string), row[3].(int64), row[4].(string)}
+		entry := SchemaEntry{row[0].(string), row[1].(string), row[2].(string), int(row[3].(int64)), row[4].(string)}
 		info.Schema = append(info.Schema, entry)
 	}
 }
@@ -390,8 +398,54 @@ func updateSchemaInfo(info *DBInfo, schemaTableData [][]any) {
 func printTables(info *DBInfo) {
 	for _, entry := range info.Schema {
 		if entry.Type == "table" {
-			fmt.Print(entry.TableName, " ")
+			fmt.Print(entry.Name, " ")
 		}
 	}
 	fmt.Println()
+}
+
+func handleSelect(databaseFile *os.File, info *DBInfo, command string) {
+
+	// TODO: properly parse SQL syntax
+
+	parts := strings.Split(command, " ")
+	parts = slices.DeleteFunc(parts, func(s string) bool {
+		return len(s) == 0
+	})
+
+	if len(parts) != 4 || strings.ToUpper(parts[0]) != "SELECT" || strings.ToUpper(parts[2]) != "FROM" {
+		log.Fatal("syntax error")
+	}
+
+	if strings.ToUpper(parts[1]) != "COUNT(*)" {
+		log.Fatal("not implemented")
+	}
+
+	tableName := parts[3]
+
+	if tableName == "sqlite_schema" || tableName == "sqlite_master" {
+		rowCount := countRows(databaseFile, info, 1)
+		fmt.Println(rowCount)
+		return
+	}
+
+	for _, entry := range info.Schema {
+		if entry.Type == "table" && entry.Name == tableName {
+			rowCount := countRows(databaseFile, info, entry.RootPage)
+			fmt.Println(rowCount)
+			return
+		}
+	}
+
+	log.Fatal("no such table:", tableName)
+}
+
+func countRows(databaseFile *os.File, info *DBInfo, rootPage int) int {
+	// TODO: traverse b-tree
+	pageHeader, _ := getPage(databaseFile, info, rootPage)
+	// only considering b-tree table leaf pages for now
+	if pageHeader.PageType != 0x0d {
+		log.Fatal("page type not implemented")
+	}
+	return int(pageHeader.CellCount)
 }
