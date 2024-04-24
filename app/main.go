@@ -72,6 +72,22 @@ func readBigEndianUint32(b []byte) uint32 {
 	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
 
+func readBigEndianVarint(b []byte) (value int64, size int) {
+	for size < 9 {
+		size++
+		if size == 9 {
+			value = (value << 8) | int64(b[size-1])
+			break
+		} else {
+			value = (value << 7) | (int64(b[size-1]) & 0b01111111)
+		}
+		if (b[size-1]>>7)&1 == 0 {
+			break
+		}
+	}
+	return
+}
+
 func readDBInfo(databaseFile *os.File) *DBInfo {
 
 	header := make([]byte, 100)
@@ -170,6 +186,8 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 		log.Fatal("invalid page type:", pageType)
 	}
 
+	// parsing b-tree page header
+
 	firstFreeBlock := readBigEndianUint16(page[1:3])
 	cellCount := readBigEndianUint16(page[3:5])
 	startOfCellContentArea := int(readBigEndianUint16(page[5:7]))
@@ -177,11 +195,120 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 		startOfCellContentArea = 65536
 	}
 	fragmentedFreeBytes := page[7]
+	cellPointerArrayOffset := 8
 	var rightMostPointer uint32
 	if pageType == 0x02 || pageType == 0x05 {
-		rightMostPointer = readBigEndianUint32(page[5:7])
+		rightMostPointer = readBigEndianUint32(page[8:12])
+		cellPointerArrayOffset += 4
+	}
+	unallocatedRegionSize := startOfCellContentArea - (cellPointerArrayOffset + int(cellCount)*2)
+
+	fmt.Printf("---------- page header ----------\n")
+	fmt.Printf("pageType:               %v\n", pageType)
+	fmt.Printf("firstFreeBlock:         %v\n", firstFreeBlock)
+	fmt.Printf("cellCount:              %v\n", cellCount)
+	fmt.Printf("startOfCellContentArea: %v\n", startOfCellContentArea)
+	fmt.Printf("fragmentedFreeBytes:    %v\n", fragmentedFreeBytes)
+	fmt.Printf("rightMostPointer:       %v\n", rightMostPointer)
+	fmt.Printf("unallocatedRegionSize:  %v\n", unallocatedRegionSize)
+
+	// only considering b-tree table leaf pages for now
+	if pageType != 0x0d {
+		log.Fatal("page type not implemented")
 	}
 
-	fmt.Println(pageType, firstFreeBlock, cellCount, startOfCellContentArea, fragmentedFreeBytes, rightMostPointer)
+	// reading each cell pointer array
+
+	records := [][]byte{}
+
+	fmt.Printf("cell\tpointer\tpayload\trowid\tcontent\n")
+	for cell := 0; cell < int(cellCount); cell++ {
+		cellPointerOffset := cellPointerArrayOffset + cell*2
+		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
+		offset := int(cellPointer) - 100 // header?
+		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
+		offset += bytes
+		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
+		offset += bytes
+		// TODO: not handling overflow!
+		content := page[offset : offset+int(payloadSize)]
+		fmt.Printf("%v\t%04x\t%v\t%v\t%q\n", cell, cellPointer, payloadSize, rowid, content)
+		records = append(records, content)
+	}
+
+	// parsing record format
+
+	fmt.Printf("record\tdata\n")
+	for i, record := range records {
+
+		// determine column type and lenghts from record header
+		recordHeaderSize, bytes := readBigEndianVarint(record)
+		index := bytes
+		columnTypeLengths := [][2]int{}
+		for index < int(recordHeaderSize) {
+			typeCode, bytes := readBigEndianVarint(record[index:recordHeaderSize])
+			var typeLength [2]int
+			switch typeCode {
+			case 0:
+				typeLength = [2]int{0, 0}
+			case 1:
+				typeLength = [2]int{1, 1}
+			case 2:
+				typeLength = [2]int{1, 2}
+			case 3:
+				typeLength = [2]int{1, 3}
+			case 4:
+				typeLength = [2]int{1, 4}
+			case 5:
+				typeLength = [2]int{1, 6}
+			case 6:
+				typeLength = [2]int{1, 8}
+			case 7:
+				typeLength = [2]int{2, 8}
+			case 8:
+				typeLength = [2]int{8, 0}
+			case 9:
+				typeLength = [2]int{9, 0}
+			case 10, 11:
+				typeLength = [2]int{int(typeCode), 1}
+			default:
+				if typeCode < 12 {
+					log.Fatal("invalid column type code: ", typeCode)
+				}
+				if typeCode%2 == 0 {
+					typeLength = [2]int{12, (int(typeCode) - 12) / 2}
+				} else {
+					typeLength = [2]int{13, (int(typeCode) - 13) / 2}
+				}
+			}
+			columnTypeLengths = append(columnTypeLengths, typeLength)
+			index += bytes
+		}
+
+		// reading data according to format/length
+
+		columnData := []any{}
+		for _, typeLength := range columnTypeLengths {
+			switch typeLength[0] {
+			case 0:
+				columnData = append(columnData, nil)
+			case 1:
+				integer, _ := readBigEndianVarint(record[index : index+typeLength[1]])
+				columnData = append(columnData, integer)
+			case 2:
+				log.Fatal("float not implemented!")
+			case 8:
+				columnData = append(columnData, 0)
+			case 9:
+				columnData = append(columnData, 0)
+			case 12:
+				columnData = append(columnData, record[index:index+typeLength[1]])
+			case 13:
+				columnData = append(columnData, string(record[index:index+typeLength[1]]))
+			}
+			index += typeLength[1]
+		}
+		fmt.Printf("%v\t%#v\n", i, columnData)
+	}
 
 }
