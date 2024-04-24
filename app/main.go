@@ -26,11 +26,14 @@ func main() {
 		log.Fatal(err)
 	}
 
+	info := readDBInfo(databaseFile)
+	readSchemaInfo(databaseFile, info)
+
 	switch command {
 	case ".dbinfo":
-		info := readDBInfo(databaseFile)
-		readSchemaInfo(databaseFile, info)
 		printDbInfo(info)
+	case ".tables":
+		printTables(info)
 	default:
 		fmt.Println("Unknown command", command)
 		os.Exit(1)
@@ -64,6 +67,15 @@ type DBInfo struct {
 	NumberOfViews              uint32
 	SchemaSize                 uint32
 	DataVersion                uint32
+	Schema                     []SchemaEntry
+}
+
+type SchemaEntry struct {
+	Type      string
+	Name      string
+	TableName string
+	RootPage  int64
+	SQL       string
 }
 
 func readBigEndianUint16(b []byte) uint16 {
@@ -310,9 +322,9 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 			case 2:
 				log.Fatal("float not implemented!")
 			case 8:
-				columnData = append(columnData, 0)
+				columnData = append(columnData, int64(0))
 			case 9:
-				columnData = append(columnData, 0)
+				columnData = append(columnData, int64(1))
 			case 12:
 				columnData = append(columnData, record[index:index+typeLength[1]])
 			case 13:
@@ -331,5 +343,16 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 		if row[0] == "table" {
 			info.NumberOfTables++
 		}
+		entry := SchemaEntry{row[0].(string), row[1].(string), row[2].(string), row[3].(int64), row[4].(string)}
+		info.Schema = append(info.Schema, entry)
 	}
+}
+
+func printTables(info *DBInfo) {
+	for _, entry := range info.Schema {
+		if entry.Type == "table" {
+			fmt.Print(entry.TableName, " ")
+		}
+	}
+	fmt.Println()
 }
