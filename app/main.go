@@ -23,23 +23,17 @@ func main() {
 	databaseFilePath := os.Args[1]
 	command := os.Args[2]
 
-	databaseFile, err := os.Open(databaseFilePath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer databaseFile.Close()
-
-	info := readDBInfo(databaseFile)
-	readSchemaInfo(databaseFile, info)
+	db := NewDbContext(databaseFilePath)
+	defer db.Close()
 
 	switch command {
 	case ".dbinfo":
-		printDbInfo(info)
+		db.PrintDbInfo()
 	case ".tables":
-		printTables(info)
+		db.PrintTables()
 	default:
 		if strings.Contains(strings.ToUpper(command), "SELECT") {
-			handleSelect(databaseFile, info, command)
+			db.HandleSelect(command)
 		} else {
 			fmt.Println("Unknown command", command)
 			os.Exit(1)
@@ -47,7 +41,13 @@ func main() {
 	}
 }
 
-type DBInfo struct {
+type DbContext struct {
+	File   *os.File
+	Info   *DbInfo
+	Schema []SchemaEntry
+}
+
+type DbInfo struct {
 	DatabasePageSize           int
 	WriteFormat                uint8
 	ReadFormat                 uint8
@@ -74,7 +74,6 @@ type DBInfo struct {
 	NumberOfViews              uint32
 	SchemaSize                 uint32
 	DataVersion                uint32
-	Schema                     []SchemaEntry
 }
 
 type SchemaEntry struct {
@@ -120,11 +119,39 @@ func readBigEndianVarint(b []byte) (value int64, size int) {
 	return
 }
 
-func readDBInfo(databaseFile *os.File) *DBInfo {
+func NewDbContext(databaseFilePath string) *DbContext {
+	db := &DbContext{}
+	file, err := os.Open(databaseFilePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db.File = file
+	db.Info = db.readDbInfo()
+	db.Schema = db.readSchema()
+	for _, entry := range db.Schema {
+		switch entry.Type {
+		case "table":
+			db.Info.NumberOfTables++
+		case "trigger":
+			db.Info.NumberOfTriggers++
+		case "view":
+			db.Info.NumberOfViews++
+		case "index":
+			db.Info.NumberOfIndexes++
+		}
+	}
+	return db
+}
+
+func (db *DbContext) Close() {
+	db.File.Close()
+}
+
+func (db *DbContext) readDbInfo() *DbInfo {
 
 	header := make([]byte, 100)
 
-	_, err := databaseFile.Read(header)
+	_, err := db.File.Read(header)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -133,7 +160,7 @@ func readDBInfo(databaseFile *os.File) *DBInfo {
 		log.Fatal("Not a valid SQLite 3 file")
 	}
 
-	var info DBInfo
+	var info DbInfo
 
 	pageSize := readBigEndianUint16(header[16:18])
 	info.DatabasePageSize = int(pageSize)
@@ -161,10 +188,12 @@ func readDBInfo(databaseFile *os.File) *DBInfo {
 	info.ApplicationID = readBigEndianUint32(header[68:72])
 	info.DataVersion = readBigEndianUint32(header[92:96])
 	info.SoftwareVersion = readBigEndianUint32(header[96:100])
+
 	return &info
 }
 
-func printDbInfo(info *DBInfo) {
+func (db *DbContext) PrintDbInfo() {
+	info := db.Info
 	encodingDescription := "?"
 	switch info.TextEncoding {
 	case 1:
@@ -198,8 +227,8 @@ func printDbInfo(info *DBInfo) {
 	fmt.Printf("data version:        %d\n", info.DataVersion)
 }
 
-func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
-	pageHeader, pageData := getPage(databaseFile, info, 1)
+func (db *DbContext) readSchema() []SchemaEntry {
+	pageHeader, pageData := db.getPage(1)
 
 	// only considering b-tree table leaf pages for now
 	if pageHeader.PageType != 0x0d {
@@ -208,15 +237,17 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 
 	rawRecords := getLeafTableRecords(pageHeader, pageData)
 	schemaTableData := getTableData(rawRecords)
-	updateSchemaInfo(info, schemaTableData)
+	schema := parseSchemaInfo(schemaTableData)
+	return schema
 }
 
-func getPage(databaseFile *os.File, info *DBInfo, pageNumber int) (header PageHeader, page []byte) {
+func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
+	info := db.Info
 	if pageNumber < 1 || pageNumber > int(info.DatabasePageCount) {
 		log.Fatal("invalid page number:", pageNumber)
 	}
 
-	_, err := databaseFile.Seek(int64(pageNumber-1)*int64(info.DatabasePageSize), io.SeekStart)
+	_, err := db.File.Seek(int64(pageNumber-1)*int64(info.DatabasePageSize), io.SeekStart)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -228,7 +259,7 @@ func getPage(databaseFile *os.File, info *DBInfo, pageNumber int) (header PageHe
 	}
 
 	page = make([]byte, info.DatabasePageSize)
-	_, err = databaseFile.Read(page)
+	_, err = db.File.Read(page)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -384,19 +415,17 @@ func getTableData(rawRecords [][]byte) (tableData [][]any) {
 	return
 }
 
-func updateSchemaInfo(info *DBInfo, schemaTableData [][]any) {
+func parseSchemaInfo(schemaTableData [][]any) []SchemaEntry {
+	schema := []SchemaEntry{}
 	for _, row := range schemaTableData {
-		// TODO: 'table', 'index', 'view', or 'trigger'
-		if row[0] == "table" {
-			info.NumberOfTables++
-		}
 		entry := SchemaEntry{row[0].(string), row[1].(string), row[2].(string), int(row[3].(int64)), row[4].(string)}
-		info.Schema = append(info.Schema, entry)
+		schema = append(schema, entry)
 	}
+	return schema
 }
 
-func printTables(info *DBInfo) {
-	for _, entry := range info.Schema {
+func (db *DbContext) PrintTables() {
+	for _, entry := range db.Schema {
 		if entry.Type == "table" {
 			fmt.Print(entry.Name, " ")
 		}
@@ -404,7 +433,7 @@ func printTables(info *DBInfo) {
 	fmt.Println()
 }
 
-func handleSelect(databaseFile *os.File, info *DBInfo, command string) {
+func (db *DbContext) HandleSelect(command string) {
 
 	// TODO: properly parse SQL syntax
 
@@ -424,14 +453,14 @@ func handleSelect(databaseFile *os.File, info *DBInfo, command string) {
 	tableName := parts[3]
 
 	if tableName == "sqlite_schema" || tableName == "sqlite_master" {
-		rowCount := countRows(databaseFile, info, 1)
+		rowCount := db.countRows(1)
 		fmt.Println(rowCount)
 		return
 	}
 
-	for _, entry := range info.Schema {
+	for _, entry := range db.Schema {
 		if entry.Type == "table" && entry.Name == tableName {
-			rowCount := countRows(databaseFile, info, entry.RootPage)
+			rowCount := db.countRows(entry.RootPage)
 			fmt.Println(rowCount)
 			return
 		}
@@ -440,9 +469,9 @@ func handleSelect(databaseFile *os.File, info *DBInfo, command string) {
 	log.Fatal("no such table:", tableName)
 }
 
-func countRows(databaseFile *os.File, info *DBInfo, rootPage int) int {
+func (db *DbContext) countRows(rootPage int) int {
 	// TODO: traverse b-tree
-	pageHeader, _ := getPage(databaseFile, info, rootPage)
+	pageHeader, _ := db.getPage(rootPage)
 	// only considering b-tree table leaf pages for now
 	if pageHeader.PageType != 0x0d {
 		log.Fatal("page type not implemented")
