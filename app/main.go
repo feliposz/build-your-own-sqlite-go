@@ -78,6 +78,17 @@ type SchemaEntry struct {
 	SQL       string
 }
 
+type PageHeader struct {
+	PageType               uint8
+	FirstFreeBlock         uint16
+	CellCount              uint16
+	StartOfCellContentArea uint32
+	FragmentedFreeBytes    uint8
+	CellPointerArrayOffset uint32
+	RightMostPointer       uint32
+	UnallocatedRegionSize  uint32
+}
+
 func readBigEndianUint16(b []byte) uint16 {
 	return uint16(b[0])<<8 | uint16(b[1])
 }
@@ -181,69 +192,90 @@ func printDbInfo(info *DBInfo) {
 }
 
 func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
-	headerSize := 100
-	_, err := databaseFile.Seek(int64(headerSize), io.SeekStart)
+	pageHeader, pageData := getPage(databaseFile, info, 1)
+
+	// only considering b-tree table leaf pages for now
+	if pageHeader.PageType != 0x0d {
+		log.Fatal("page type not implemented")
+	}
+
+	rawRecords := getLeafTableRecords(pageHeader, pageData)
+	schemaTableData := getTableData(rawRecords)
+	updateSchemaInfo(info, schemaTableData)
+}
+
+func getPage(databaseFile *os.File, info *DBInfo, pageNumber int) (header PageHeader, page []byte) {
+	if pageNumber < 1 || pageNumber > int(info.DatabasePageCount) {
+		log.Fatal("invalid page number:", pageNumber)
+	}
+
+	_, err := databaseFile.Seek(int64(pageNumber-1)*int64(info.DatabasePageSize), io.SeekStart)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	page := make([]byte, info.DatabasePageSize-headerSize)
-	databaseFile.Read(page)
+	pageOffset := 0
+	if pageNumber == 1 {
+		// skip database header for root page
+		pageOffset += 100
+	}
 
-	pageType := page[0]
-	switch pageType {
-	case 0x02:
-	case 0x05:
-	case 0x0a:
-	case 0x0d:
+	page = make([]byte, info.DatabasePageSize)
+	_, err = databaseFile.Read(page)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	header.PageType = page[pageOffset]
+	switch header.PageType {
+	case 0x02, 0x05, 0x0a, 0x0d:
+		// ok
 	default:
-		log.Fatal("invalid page type:", pageType)
+		log.Fatal("invalid page type:", header.PageType)
 	}
 
 	// parsing b-tree page header
 
-	firstFreeBlock := readBigEndianUint16(page[1:3])
-	cellCount := readBigEndianUint16(page[3:5])
-	startOfCellContentArea := int(readBigEndianUint16(page[5:7]))
-	if startOfCellContentArea == 0 {
-		startOfCellContentArea = 65536
+	header.FirstFreeBlock = readBigEndianUint16(page[pageOffset+1 : pageOffset+3])
+	header.CellCount = readBigEndianUint16(page[pageOffset+3 : pageOffset+5])
+	header.StartOfCellContentArea = uint32(readBigEndianUint16(page[pageOffset+5 : pageOffset+7]))
+	if header.StartOfCellContentArea == 0 {
+		header.StartOfCellContentArea = 65536
 	}
-	fragmentedFreeBytes := page[7]
-	cellPointerArrayOffset := 8
-	var rightMostPointer uint32
-	if pageType == 0x02 || pageType == 0x05 {
-		rightMostPointer = readBigEndianUint32(page[8:12])
-		cellPointerArrayOffset += 4
+	header.FragmentedFreeBytes = page[pageOffset+7]
+	header.CellPointerArrayOffset = 8
+	if header.PageType == 0x02 || header.PageType == 0x05 {
+		header.RightMostPointer = readBigEndianUint32(page[pageOffset+8 : pageOffset+12])
+		header.CellPointerArrayOffset += 4
 	}
-	unallocatedRegionSize := startOfCellContentArea - (cellPointerArrayOffset + int(cellCount)*2)
+	header.UnallocatedRegionSize = header.StartOfCellContentArea - (header.CellPointerArrayOffset + uint32(header.CellCount)*2)
+
+	// account for the db header if needed
+	header.CellPointerArrayOffset += uint32(pageOffset)
 
 	if debugMode {
 		fmt.Printf("---------- page header ----------\n")
-		fmt.Printf("pageType:               %v\n", pageType)
-		fmt.Printf("firstFreeBlock:         %v\n", firstFreeBlock)
-		fmt.Printf("cellCount:              %v\n", cellCount)
-		fmt.Printf("startOfCellContentArea: %v\n", startOfCellContentArea)
-		fmt.Printf("fragmentedFreeBytes:    %v\n", fragmentedFreeBytes)
-		fmt.Printf("rightMostPointer:       %v\n", rightMostPointer)
-		fmt.Printf("unallocatedRegionSize:  %v\n", unallocatedRegionSize)
+		fmt.Printf("pageType:               %v\n", header.PageType)
+		fmt.Printf("firstFreeBlock:         %v\n", header.FirstFreeBlock)
+		fmt.Printf("cellCount:              %v\n", header.CellCount)
+		fmt.Printf("startOfCellContentArea: %v\n", header.StartOfCellContentArea)
+		fmt.Printf("fragmentedFreeBytes:    %v\n", header.FragmentedFreeBytes)
+		fmt.Printf("rightMostPointer:       %v\n", header.RightMostPointer)
+		fmt.Printf("unallocatedRegionSize:  %v\n", header.UnallocatedRegionSize)
 	}
+	return
+}
 
-	// only considering b-tree table leaf pages for now
-	if pageType != 0x0d {
-		log.Fatal("page type not implemented")
-	}
+func getLeafTableRecords(pageHeader PageHeader, page []byte) (rawRecords [][]byte) {
 
 	// reading each cell pointer array
-
-	rawRecords := [][]byte{}
-
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpayload\trowid\tcontent\n")
 	}
-	for cell := 0; cell < int(cellCount); cell++ {
-		cellPointerOffset := cellPointerArrayOffset + cell*2
+	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
+		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
 		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
-		offset := int(cellPointer) - 100 // header?
+		offset := int(cellPointer)
 		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
 		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
@@ -256,7 +288,10 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 		rawRecords = append(rawRecords, content)
 	}
 
-	tableData := [][]any{}
+	return
+}
+
+func getTableData(rawRecords [][]byte) (tableData [][]any) {
 
 	// parsing record format
 
@@ -339,7 +374,11 @@ func readSchemaInfo(databaseFile *os.File, info *DBInfo) {
 		tableData = append(tableData, columnData)
 	}
 
-	for _, row := range tableData {
+	return
+}
+
+func updateSchemaInfo(info *DBInfo, schemaTableData [][]any) {
+	for _, row := range schemaTableData {
 		if row[0] == "table" {
 			info.NumberOfTables++
 		}
