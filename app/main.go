@@ -480,12 +480,22 @@ func (db *DbContext) HandleSelect(query string) {
 	queryUpper := strings.ToUpper(query)
 	selectPos := strings.Index(queryUpper, "SELECT")
 	fromPos := strings.Index(queryUpper, "FROM")
+	wherePos := strings.Index(queryUpper, "WHERE")
 
 	if selectPos < 0 || fromPos < 0 || fromPos < selectPos {
 		log.Fatal("syntax error")
 	}
 
-	queryTableName := strings.TrimSpace(query[fromPos+4:])
+	var filterColumnName, filterValue string
+	if wherePos == -1 {
+		wherePos = len(query)
+	} else {
+		whereParts := strings.Split(query[wherePos+5:], "=")
+		filterColumnName = strings.TrimSpace(whereParts[0])
+		filterValue = strings.Trim(strings.TrimSpace(whereParts[1]), "'")
+	}
+
+	queryTableName := strings.TrimSpace(query[fromPos+4 : wherePos])
 	queryColumnNames := strings.Split(query[selectPos+6:fromPos], ",")
 	for i := range queryColumnNames {
 		queryColumnNames[i] = strings.TrimSpace(queryColumnNames[i])
@@ -544,12 +554,30 @@ func (db *DbContext) HandleSelect(query string) {
 		}
 	}
 
+	filterColumnNumber := -1
+	if filterColumnName != "" {
+		found := false
+		for number, column := range tableColumns {
+			if strings.EqualFold(filterColumnName, column.Name) {
+				filterColumnNumber = number
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Fatal("no such column:", filterColumnName)
+		}
+	}
+
 	header, page := db.getPage(rootPage)
 	if header.PageType != 0x0d {
 		log.Fatal("page type not implemented:", header.PageType)
 	}
 	tableData := getLeafTableRecords(header, page)
 	for _, tableRow := range tableData {
+		if filterColumnNumber >= 0 && tableRow.Columns[filterColumnNumber] != filterValue {
+			continue
+		}
 		for i, columnNumber := range queryColumnNumbers {
 			if i > 0 {
 				fmt.Print("|")
