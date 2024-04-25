@@ -472,27 +472,69 @@ func (db *DbContext) HandleSelect(command string) {
 		log.Fatal("syntax error")
 	}
 
-	if strings.ToUpper(parts[1]) != "COUNT(*)" {
-		log.Fatal("not implemented")
-	}
-
 	tableName := parts[3]
+	queryColumnNames := []string{parts[1]}
+
+	rootPage := 0
+	var tableColumns []string
 
 	if tableName == "sqlite_schema" || tableName == "sqlite_master" {
-		rowCount := db.countRows(1)
-		fmt.Println(rowCount)
-		return
+		rootPage = 1
+		tableColumns = []string{"type", "name", "tbl_name", "rootpage", "sql"}
 	}
 
 	for _, entry := range db.Schema {
 		if entry.Type == "table" && entry.Name == tableName {
-			rowCount := db.countRows(entry.RootPage)
-			fmt.Println(rowCount)
-			return
+			rootPage = entry.RootPage
+			tableColumns = entry.Columns
+			break
 		}
 	}
 
-	log.Fatal("no such table:", tableName)
+	if rootPage == 0 {
+		log.Fatal("no such table:", tableName)
+	}
+
+	// TODO: treat COUNT(*) and other functions as a "regular column" later?
+	if strings.ToUpper(queryColumnNames[0]) == "COUNT(*)" {
+		rowCount := db.countRows(rootPage)
+		fmt.Println(rowCount)
+		return
+	}
+
+	// translate the column names from the query to the column numbers
+
+	queryColumnNumbers := []int{}
+	for _, queryColumnName := range queryColumnNames {
+		found := false
+		for number, name := range tableColumns {
+			if strings.ToUpper(queryColumnName) == strings.ToUpper(name) {
+				queryColumnNumbers = append(queryColumnNumbers, number)
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Fatal("no such column:", queryColumnName)
+		}
+	}
+
+	header, page := db.getPage(rootPage)
+	if header.PageType != 0x0d {
+		log.Fatal("page type not implemented:", header.PageType)
+	}
+	rawRecords := getLeafTableRecords(header, page)
+	tableData := getTableData(rawRecords)
+	for _, tableRow := range tableData {
+		for i, columnNumber := range queryColumnNumbers {
+			if i > 0 {
+				fmt.Print("|")
+			}
+			fmt.Print(tableRow[columnNumber])
+		}
+		fmt.Println()
+	}
+
 }
 
 func (db *DbContext) countRows(rootPage int) int {
