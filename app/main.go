@@ -10,7 +10,7 @@ import (
 	// "github.com/xwb1989/sqlparser"
 )
 
-var debugMode bool
+var debugMode bool = true
 
 // Usage: your_sqlite3.sh sample.db .dbinfo
 func main() {
@@ -365,6 +365,34 @@ func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
 	return
 }
 
+type InteriorTableEntry struct {
+	childPage uint32
+	key       int64
+}
+
+func getInteriorTableEntries(pageHeader PageHeader, page []byte) (entries []InteriorTableEntry) {
+	if debugMode {
+		fmt.Printf("cell\tpointer\tpage\tkey\n")
+	}
+
+	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
+		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
+		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
+		offset := int(cellPointer)
+		leftChildPage := readBigEndianUint32(page[offset : offset+4])
+		offset += 4
+		key, bytes := readBigEndianVarint(page[offset:])
+		offset += bytes
+		if debugMode {
+			fmt.Printf("%v\t%04x\t%v\t%v\n", cell, cellPointer, leftChildPage, key)
+		}
+		entries = append(entries, InteriorTableEntry{leftChildPage, key})
+	}
+	entries = append(entries, InteriorTableEntry{pageHeader.RightMostPointer, -1})
+
+	return
+}
+
 func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableRecord) {
 
 	// reading each cell pointer array
@@ -522,7 +550,7 @@ func (db *DbContext) HandleSelect(query string) {
 		log.Fatal("no such table:", queryTableName)
 	}
 
-	// TODO: treat COUNT(*) and other functions as a "regular column" later?
+	// TODO: this will not work when WHERE clause is used, must process records
 	if strings.EqualFold(queryColumnNames[0], "COUNT(*)") {
 		rowCount := db.countRows(rootPage)
 		fmt.Println(rowCount)
@@ -570,6 +598,10 @@ func (db *DbContext) HandleSelect(query string) {
 	}
 
 	header, page := db.getPage(rootPage)
+	if header.PageType == 0x05 {
+		_ = getInteriorTableEntries(header, page)
+		os.Exit(1)
+	}
 	if header.PageType != 0x0d {
 		log.Fatal("page type not implemented:", header.PageType)
 	}
