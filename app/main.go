@@ -5,7 +5,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"slices"
 	"strings"
 	// Available if you need it!
 	// "github.com/xwb1989/sqlparser"
@@ -478,29 +477,31 @@ func (db *DbContext) HandleSelect(query string) {
 
 	// TODO: properly parse SQL syntax
 
-	parts := strings.Split(query, " ")
-	parts = slices.DeleteFunc(parts, func(s string) bool {
-		return len(s) == 0
-	})
+	queryUpper := strings.ToUpper(query)
+	selectPos := strings.Index(queryUpper, "SELECT")
+	fromPos := strings.Index(queryUpper, "FROM")
 
-	if len(parts) != 4 || strings.ToUpper(parts[0]) != "SELECT" || strings.ToUpper(parts[len(parts)-2]) != "FROM" {
+	if selectPos < 0 || fromPos < 0 || fromPos < selectPos {
 		log.Fatal("syntax error")
 	}
 
-	tableName := parts[len(parts)-1]
-	queryColumnNames := []string{parts[1]}
+	queryTableName := strings.TrimSpace(query[fromPos+4:])
+	queryColumnNames := strings.Split(query[selectPos+6:fromPos], ",")
+	for i := range queryColumnNames {
+		queryColumnNames[i] = strings.TrimSpace(queryColumnNames[i])
+	}
 
 	rootPage := 0
 	var tableColumns []ColumnDef
 
-	if strings.EqualFold(tableName, "sqlite_schema") || strings.EqualFold(tableName, "sqlite_master") {
+	if strings.EqualFold(queryTableName, "sqlite_schema") || strings.EqualFold(queryTableName, "sqlite_master") {
 		rootPage = 1
 		// sqlite_schema has no table definition - this is the one from the docs: https://www.sqlite.org/fileformat.html#storage_of_the_sql_database_schema
 		tableColumns, _ = parseColumns("CREATE TABLE sqlite_schema(type text, name text, tbl_name text, rootpage integer, sql text);")
 	}
 
 	for _, entry := range db.Schema {
-		if entry.Type == "table" && strings.EqualFold(tableName, entry.Name) {
+		if entry.Type == "table" && strings.EqualFold(queryTableName, entry.Name) {
 			rootPage = entry.RootPage
 			tableColumns = entry.Columns
 			break
@@ -508,7 +509,7 @@ func (db *DbContext) HandleSelect(query string) {
 	}
 
 	if rootPage == 0 {
-		log.Fatal("no such table:", tableName)
+		log.Fatal("no such table:", queryTableName)
 	}
 
 	// TODO: treat COUNT(*) and other functions as a "regular column" later?
@@ -519,7 +520,7 @@ func (db *DbContext) HandleSelect(query string) {
 	}
 
 	// replace "*" with the names for the table columns
-	if queryColumnNames[0] == "*" {
+	if len(queryColumnNames) == 1 && queryColumnNames[0] == "*" {
 		queryColumnNames = nil
 		for _, column := range tableColumns {
 			queryColumnNames = append(queryColumnNames, column.Name)
