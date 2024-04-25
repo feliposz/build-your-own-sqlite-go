@@ -82,6 +82,7 @@ type SchemaEntry struct {
 	TableName string
 	RootPage  int
 	SQL       string
+	Columns   []string
 }
 
 type PageHeader struct {
@@ -126,20 +127,8 @@ func NewDbContext(databaseFilePath string) *DbContext {
 		log.Fatal(err)
 	}
 	db.File = file
-	db.Info = db.readDbInfo()
-	db.Schema = db.readSchema()
-	for _, entry := range db.Schema {
-		switch entry.Type {
-		case "table":
-			db.Info.NumberOfTables++
-		case "trigger":
-			db.Info.NumberOfTriggers++
-		case "view":
-			db.Info.NumberOfViews++
-		case "index":
-			db.Info.NumberOfIndexes++
-		}
-	}
+	db.readDbInfo()
+	db.readSchema()
 	return db
 }
 
@@ -147,7 +136,7 @@ func (db *DbContext) Close() {
 	db.File.Close()
 }
 
-func (db *DbContext) readDbInfo() *DbInfo {
+func (db *DbContext) readDbInfo() {
 
 	header := make([]byte, 100)
 
@@ -189,7 +178,7 @@ func (db *DbContext) readDbInfo() *DbInfo {
 	info.DataVersion = readBigEndianUint32(header[92:96])
 	info.SoftwareVersion = readBigEndianUint32(header[96:100])
 
-	return &info
+	db.Info = &info
 }
 
 func (db *DbContext) PrintDbInfo() {
@@ -227,7 +216,7 @@ func (db *DbContext) PrintDbInfo() {
 	fmt.Printf("data version:        %d\n", info.DataVersion)
 }
 
-func (db *DbContext) readSchema() []SchemaEntry {
+func (db *DbContext) readSchema() {
 	pageHeader, pageData := db.getPage(1)
 
 	// only considering b-tree table leaf pages for now
@@ -237,8 +226,54 @@ func (db *DbContext) readSchema() []SchemaEntry {
 
 	rawRecords := getLeafTableRecords(pageHeader, pageData)
 	schemaTableData := getTableData(rawRecords)
-	schema := parseSchemaInfo(schemaTableData)
-	return schema
+
+	schema := []SchemaEntry{}
+	for _, row := range schemaTableData {
+		entry := SchemaEntry{
+			Type:      row[0].(string),
+			Name:      row[1].(string),
+			TableName: row[2].(string),
+			RootPage:  int(row[3].(int64)),
+			SQL:       row[4].(string),
+		}
+		switch entry.Type {
+		case "table":
+			db.Info.NumberOfTables++
+			entry.Columns = parseColumnNames(entry.SQL)
+		case "trigger":
+			db.Info.NumberOfTriggers++
+		case "view":
+			db.Info.NumberOfViews++
+			entry.Columns = parseColumnNames(entry.SQL)
+		case "index":
+			db.Info.NumberOfIndexes++
+		}
+		schema = append(schema, entry)
+	}
+	db.Schema = schema
+
+}
+
+func parseColumnNames(sql string) []string {
+	columns := []string{}
+	if !strings.HasPrefix(sql, "CREATE") {
+		log.Fatal("invalid DDL statement")
+	}
+	// remove everything before first "(" and last ")"
+	sql = sql[strings.Index(sql, "(")+1:]
+	sql = sql[:strings.LastIndex(sql, ")")]
+	// TODO: type names can have "," inside them! parse this properly!!!
+	for _, columnDefinition := range strings.Split(sql, ",") {
+		columnDefinition = strings.TrimSpace(columnDefinition)
+		parts := strings.Split(columnDefinition, " ")
+		switch strings.ToUpper(parts[0]) {
+		case "PRIMARY", "CONSTRAINT", "UNIQUE", "CHECK", "FOREIGN":
+			// skipping table constraints for now
+		default:
+			columns = append(columns, parts[0])
+		}
+	}
+	return columns
 }
 
 func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
@@ -413,15 +448,6 @@ func getTableData(rawRecords [][]byte) (tableData [][]any) {
 	}
 
 	return
-}
-
-func parseSchemaInfo(schemaTableData [][]any) []SchemaEntry {
-	schema := []SchemaEntry{}
-	for _, row := range schemaTableData {
-		entry := SchemaEntry{row[0].(string), row[1].(string), row[2].(string), int(row[3].(int64)), row[4].(string)}
-		schema = append(schema, entry)
-	}
-	return schema
 }
 
 func (db *DbContext) PrintTables() {
