@@ -30,6 +30,10 @@ func main() {
 		db.PrintDbInfo()
 	case ".tables":
 		db.PrintTables()
+	case ".indexes":
+		db.PrintIndexes()
+	case ".schema":
+		db.PrintSchema()
 	default:
 		if strings.Contains(strings.ToUpper(command), "SELECT") {
 			db.HandleSelect(command)
@@ -257,11 +261,11 @@ func (db *DbContext) readSchema() {
 			entry.Columns, entry.Constraints = parseColumns(entry.SQL)
 		case "index":
 			db.Info.NumberOfIndexes++
+			entry.Columns, _ = parseColumns(entry.SQL)
 		}
 		schema = append(schema, entry)
 	}
 	db.Schema = schema
-
 }
 
 func parseColumns(sql string) ([]ColumnDef, []string) {
@@ -487,11 +491,26 @@ func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableR
 
 func (db *DbContext) PrintTables() {
 	for _, entry := range db.Schema {
-		if entry.Type == "table" {
+		if entry.Type == "table" && !strings.HasPrefix(entry.Name, "sqlite_") {
 			fmt.Print(entry.Name, " ")
 		}
 	}
 	fmt.Println()
+}
+
+func (db *DbContext) PrintIndexes() {
+	for _, entry := range db.Schema {
+		if entry.Type == "index" {
+			fmt.Print(entry.Name, " ")
+		}
+	}
+	fmt.Println()
+}
+
+func (db *DbContext) PrintSchema() {
+	for _, entry := range db.Schema {
+		fmt.Println(entry.SQL)
+	}
 }
 
 func (db *DbContext) HandleSelect(query string) {
