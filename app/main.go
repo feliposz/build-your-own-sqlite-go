@@ -111,6 +111,16 @@ type TableRecord struct {
 	Columns []any
 }
 
+type InteriorTableEntry struct {
+	childPage uint32
+	key       int64
+}
+
+type InteriorIndexEntry struct {
+	childPage uint32
+	key       []byte
+}
+
 func readBigEndianUint16(b []byte) uint16 {
 	return uint16(b[0])<<8 | uint16(b[1])
 }
@@ -362,11 +372,6 @@ func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
 	return
 }
 
-type InteriorTableEntry struct {
-	childPage uint32
-	key       int64
-}
-
 func getInteriorTableEntries(pageHeader PageHeader, page []byte) (entries []InteriorTableEntry) {
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpage\tkey\n")
@@ -595,6 +600,7 @@ func (db *DbContext) HandleSelect(query string) {
 	}
 
 	filterColumnNumber := -1
+	filterIndexPage := -1
 	if filterColumnName != "" {
 		found := false
 		for number, column := range tableColumns {
@@ -607,9 +613,21 @@ func (db *DbContext) HandleSelect(query string) {
 		if !found {
 			log.Fatal("no such column:", filterColumnName)
 		}
+
+		for _, entry := range db.Schema {
+			if entry.Type == "index" && strings.EqualFold(queryTableName, entry.TableName) && strings.EqualFold(filterColumnName, entry.Columns[0].Name) {
+				filterIndexPage = entry.RootPage
+				break
+			}
+		}
 	}
 
-	tableData := db.fullTableScan(rootPage)
+	var tableData []TableRecord
+	if filterIndexPage == -1 {
+		tableData = db.fullTableScan(rootPage)
+	} else {
+		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue)
+	}
 
 	for _, tableRow := range tableData {
 		if filterColumnNumber >= 0 && tableRow.Columns[filterColumnNumber] != filterValue {
@@ -664,4 +682,53 @@ func (db *DbContext) countRows(rootPage int) int {
 		log.Fatal("page type not implemented")
 	}
 	return int(pageHeader.CellCount)
+}
+
+func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue string) []TableRecord {
+	var tableData []TableRecord
+	db.walkBtreeIndexPages(filterIndexPage, &tableData)
+	return tableData
+}
+
+func (db *DbContext) walkBtreeIndexPages(page int, tableDataPtr *[]TableRecord) {
+	header, data := db.getPage(page)
+	if header.PageType == 0x02 {
+		entries := getInteriorIndexEntries(header, data)
+		// TODO: binary search!
+		for _, entry := range entries {
+			db.walkBtreeIndexPages(int(entry.childPage), tableDataPtr)
+		}
+	} else if header.PageType == 0x0a {
+		//records := getLeafIndexRecords(header, data)
+		//*tableDataPtr = append(*tableDataPtr, records...)
+	} else {
+		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+	}
+}
+
+func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []InteriorIndexEntry) {
+	debugMode := true
+	if debugMode {
+		fmt.Printf("cell\tpointer\tpage\tkey\n")
+	}
+
+	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
+		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
+		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
+		offset := int(cellPointer)
+		leftChildPage := readBigEndianUint32(page[offset : offset+4])
+		offset += 4
+		// TODO: handle overflow!
+		keySize, bytes := readBigEndianVarint(page[offset:])
+		offset += bytes
+		keyPayload := page[offset : offset+int(keySize)]
+		// TODO: parse payload
+		if debugMode {
+			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, keyPayload)
+		}
+		entries = append(entries, InteriorIndexEntry{leftChildPage, keyPayload})
+	}
+	entries = append(entries, InteriorIndexEntry{pageHeader.RightMostPointer, nil})
+
+	return
 }
