@@ -77,12 +77,19 @@ type DbInfo struct {
 }
 
 type SchemaEntry struct {
-	Type      string
-	Name      string
-	TableName string
-	RootPage  int
-	SQL       string
-	Columns   []string
+	Type        string
+	Name        string
+	TableName   string
+	RootPage    int
+	SQL         string
+	Columns     []ColumnDef
+	Constraints []string
+}
+
+type ColumnDef struct {
+	Name        string
+	Type        string
+	Constraints []string
 }
 
 type PageHeader struct {
@@ -96,6 +103,11 @@ type PageHeader struct {
 	UnallocatedRegionSize  uint32
 }
 
+type TableRecord struct {
+	Rowid   int64
+	Columns []any
+}
+
 func readBigEndianUint16(b []byte) uint16 {
 	return uint16(b[0])<<8 | uint16(b[1])
 }
@@ -104,20 +116,27 @@ func readBigEndianUint32(b []byte) uint32 {
 	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
 
-func readBigEndianVarint(b []byte) (value int64, size int) {
+func readBigEndianVarint(data []byte) (value int64, size int) {
 	for size < 9 {
 		size++
 		if size == 9 {
-			value = (value << 8) | int64(b[size-1])
+			value = (value << 8) | int64(data[size-1])
 			break
 		} else {
-			value = (value << 7) | (int64(b[size-1]) & 0b01111111)
+			value = (value << 7) | (int64(data[size-1]) & 0b01111111)
 		}
-		if (b[size-1]>>7)&1 == 0 {
+		if (data[size-1]>>7)&1 == 0 {
 			break
 		}
 	}
 	return
+}
+
+func readBigEndianInt(data []byte) (value int64) {
+	for _, b := range data {
+		value = (value << 8) | int64(b)
+	}
+	return value
 }
 
 func NewDbContext(databaseFilePath string) *DbContext {
@@ -224,27 +243,26 @@ func (db *DbContext) readSchema() {
 		log.Fatal("page type not implemented")
 	}
 
-	rawRecords := getLeafTableRecords(pageHeader, pageData)
-	schemaTableData := getTableData(rawRecords)
+	schemaTableData := getLeafTableRecords(pageHeader, pageData)
 
 	schema := []SchemaEntry{}
 	for _, row := range schemaTableData {
 		entry := SchemaEntry{
-			Type:      row[0].(string),
-			Name:      row[1].(string),
-			TableName: row[2].(string),
-			RootPage:  int(row[3].(int64)),
-			SQL:       row[4].(string),
+			Type:      row.Columns[0].(string),
+			Name:      row.Columns[1].(string),
+			TableName: row.Columns[2].(string),
+			RootPage:  int(row.Columns[3].(int64)),
+			SQL:       row.Columns[4].(string),
 		}
 		switch entry.Type {
 		case "table":
 			db.Info.NumberOfTables++
-			entry.Columns = parseColumnNames(entry.SQL)
+			entry.Columns, entry.Constraints = parseColumns(entry.SQL)
 		case "trigger":
 			db.Info.NumberOfTriggers++
 		case "view":
 			db.Info.NumberOfViews++
-			entry.Columns = parseColumnNames(entry.SQL)
+			entry.Columns, entry.Constraints = parseColumns(entry.SQL)
 		case "index":
 			db.Info.NumberOfIndexes++
 		}
@@ -254,8 +272,9 @@ func (db *DbContext) readSchema() {
 
 }
 
-func parseColumnNames(sql string) []string {
-	columns := []string{}
+func parseColumns(sql string) ([]ColumnDef, []string) {
+	columns := []ColumnDef{}
+	constraints := []string{}
 	if !strings.HasPrefix(sql, "CREATE") {
 		log.Fatal("invalid DDL statement")
 	}
@@ -268,12 +287,20 @@ func parseColumnNames(sql string) []string {
 		parts := strings.Split(columnDefinition, " ")
 		switch strings.ToUpper(parts[0]) {
 		case "PRIMARY", "CONSTRAINT", "UNIQUE", "CHECK", "FOREIGN":
-			// skipping table constraints for now
+			constraints = append(constraints, columnDefinition)
 		default:
-			columns = append(columns, parts[0])
+			column := ColumnDef{}
+			column.Name = parts[0]
+			if len(parts) > 1 {
+				column.Type = parts[1]
+			}
+			if len(parts) > 2 {
+				column.Constraints = parts[2:]
+			}
+			columns = append(columns, column)
 		}
 	}
-	return columns
+	return columns, constraints
 }
 
 func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
@@ -339,7 +366,7 @@ func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
 	return
 }
 
-func getLeafTableRecords(pageHeader PageHeader, page []byte) (rawRecords [][]byte) {
+func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableRecord) {
 
 	// reading each cell pointer array
 	if debugMode {
@@ -354,24 +381,12 @@ func getLeafTableRecords(pageHeader PageHeader, page []byte) (rawRecords [][]byt
 		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
 		// TODO: not handling overflow!
-		content := page[offset : offset+int(payloadSize)]
+		record := page[offset : offset+int(payloadSize)]
 		if debugMode {
-			fmt.Printf("%v\t%04x\t%v\t%v\t%q\n", cell, cellPointer, payloadSize, rowid, content)
+			fmt.Printf("%v\t%04x\t%v\t%v\t", cell, cellPointer, payloadSize, rowid)
 		}
-		rawRecords = append(rawRecords, content)
-	}
 
-	return
-}
-
-func getTableData(rawRecords [][]byte) (tableData [][]any) {
-
-	// parsing record format
-
-	if debugMode {
-		fmt.Printf("record\tdata\n")
-	}
-	for i, record := range rawRecords {
+		// parsing record format
 
 		// determine column type and lenghts from record header
 		recordHeaderSize, bytes := readBigEndianVarint(record)
@@ -425,7 +440,7 @@ func getTableData(rawRecords [][]byte) (tableData [][]any) {
 			case 0:
 				columnData = append(columnData, nil)
 			case 1:
-				integer, _ := readBigEndianVarint(record[index : index+typeLength[1]])
+				integer := readBigEndianInt(record[index : index+typeLength[1]])
 				columnData = append(columnData, integer)
 			case 2:
 				log.Fatal("float not implemented!")
@@ -441,10 +456,10 @@ func getTableData(rawRecords [][]byte) (tableData [][]any) {
 			index += typeLength[1]
 		}
 		if debugMode {
-			fmt.Printf("%v\t%#v\n", i, columnData)
+			fmt.Printf("%#v\n", columnData)
 		}
 
-		tableData = append(tableData, columnData)
+		tableData = append(tableData, TableRecord{Rowid: rowid, Columns: columnData})
 	}
 
 	return
@@ -459,32 +474,33 @@ func (db *DbContext) PrintTables() {
 	fmt.Println()
 }
 
-func (db *DbContext) HandleSelect(command string) {
+func (db *DbContext) HandleSelect(query string) {
 
 	// TODO: properly parse SQL syntax
 
-	parts := strings.Split(command, " ")
+	parts := strings.Split(query, " ")
 	parts = slices.DeleteFunc(parts, func(s string) bool {
 		return len(s) == 0
 	})
 
-	if len(parts) != 4 || strings.ToUpper(parts[0]) != "SELECT" || strings.ToUpper(parts[2]) != "FROM" {
+	if len(parts) != 4 || strings.ToUpper(parts[0]) != "SELECT" || strings.ToUpper(parts[len(parts)-2]) != "FROM" {
 		log.Fatal("syntax error")
 	}
 
-	tableName := parts[3]
+	tableName := parts[len(parts)-1]
 	queryColumnNames := []string{parts[1]}
 
 	rootPage := 0
-	var tableColumns []string
+	var tableColumns []ColumnDef
 
-	if tableName == "sqlite_schema" || tableName == "sqlite_master" {
+	if strings.EqualFold(tableName, "sqlite_schema") || strings.EqualFold(tableName, "sqlite_master") {
 		rootPage = 1
-		tableColumns = []string{"type", "name", "tbl_name", "rootpage", "sql"}
+		// sqlite_schema has no table definition - this is the one from the docs: https://www.sqlite.org/fileformat.html#storage_of_the_sql_database_schema
+		tableColumns, _ = parseColumns("CREATE TABLE sqlite_schema(type text, name text, tbl_name text, rootpage integer, sql text);")
 	}
 
 	for _, entry := range db.Schema {
-		if entry.Type == "table" && entry.Name == tableName {
+		if entry.Type == "table" && strings.EqualFold(tableName, entry.Name) {
 			rootPage = entry.RootPage
 			tableColumns = entry.Columns
 			break
@@ -496,10 +512,18 @@ func (db *DbContext) HandleSelect(command string) {
 	}
 
 	// TODO: treat COUNT(*) and other functions as a "regular column" later?
-	if strings.ToUpper(queryColumnNames[0]) == "COUNT(*)" {
+	if strings.EqualFold(queryColumnNames[0], "COUNT(*)") {
 		rowCount := db.countRows(rootPage)
 		fmt.Println(rowCount)
 		return
+	}
+
+	// replace "*" with the names for the table columns
+	if queryColumnNames[0] == "*" {
+		queryColumnNames = nil
+		for _, column := range tableColumns {
+			queryColumnNames = append(queryColumnNames, column.Name)
+		}
 	}
 
 	// translate the column names from the query to the column numbers
@@ -507,8 +531,8 @@ func (db *DbContext) HandleSelect(command string) {
 	queryColumnNumbers := []int{}
 	for _, queryColumnName := range queryColumnNames {
 		found := false
-		for number, name := range tableColumns {
-			if strings.ToUpper(queryColumnName) == strings.ToUpper(name) {
+		for number, column := range tableColumns {
+			if strings.EqualFold(queryColumnName, column.Name) {
 				queryColumnNumbers = append(queryColumnNumbers, number)
 				found = true
 				break
@@ -523,14 +547,22 @@ func (db *DbContext) HandleSelect(command string) {
 	if header.PageType != 0x0d {
 		log.Fatal("page type not implemented:", header.PageType)
 	}
-	rawRecords := getLeafTableRecords(header, page)
-	tableData := getTableData(rawRecords)
+	tableData := getLeafTableRecords(header, page)
 	for _, tableRow := range tableData {
 		for i, columnNumber := range queryColumnNumbers {
 			if i > 0 {
 				fmt.Print("|")
 			}
-			fmt.Print(tableRow[columnNumber])
+			data := tableRow.Columns[columnNumber]
+			if data == nil {
+				columnDef := tableColumns[columnNumber]
+				// autoincrement integer primary keys are stored as null and aliased with the rowid
+				// TODO: properly check for primary key and do this only once, not for every row!!!
+				if strings.EqualFold(columnDef.Type, "integer") && len(columnDef.Constraints) > 0 && strings.EqualFold(columnDef.Constraints[0], "primary") {
+					data = tableRow.Rowid
+				}
+			}
+			fmt.Print(data)
 		}
 		fmt.Println()
 	}
