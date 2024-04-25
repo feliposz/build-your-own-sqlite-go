@@ -10,7 +10,7 @@ import (
 	// "github.com/xwb1989/sqlparser"
 )
 
-var debugMode bool = true
+var debugMode bool
 
 // Usage: your_sqlite3.sh sample.db .dbinfo
 func main() {
@@ -235,14 +235,7 @@ func (db *DbContext) PrintDbInfo() {
 }
 
 func (db *DbContext) readSchema() {
-	pageHeader, pageData := db.getPage(1)
-
-	// only considering b-tree table leaf pages for now
-	if pageHeader.PageType != 0x0d {
-		log.Fatal("page type not implemented")
-	}
-
-	schemaTableData := getLeafTableRecords(pageHeader, pageData)
+	schemaTableData := db.fullTableScan(1)
 
 	schema := []SchemaEntry{}
 	for _, row := range schemaTableData {
@@ -597,15 +590,8 @@ func (db *DbContext) HandleSelect(query string) {
 		}
 	}
 
-	header, page := db.getPage(rootPage)
-	if header.PageType == 0x05 {
-		_ = getInteriorTableEntries(header, page)
-		os.Exit(1)
-	}
-	if header.PageType != 0x0d {
-		log.Fatal("page type not implemented:", header.PageType)
-	}
-	tableData := getLeafTableRecords(header, page)
+	tableData := db.fullTableScan(rootPage)
+
 	for _, tableRow := range tableData {
 		if filterColumnNumber >= 0 && tableRow.Columns[filterColumnNumber] != filterValue {
 			continue
@@ -628,6 +614,27 @@ func (db *DbContext) HandleSelect(query string) {
 		fmt.Println()
 	}
 
+}
+
+func (db *DbContext) fullTableScan(rootPage int) []TableRecord {
+	var tableData []TableRecord
+	db.walkBtreeTablePages(rootPage, &tableData)
+	return tableData
+}
+
+func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) {
+	header, data := db.getPage(page)
+	if header.PageType == 0x05 {
+		entries := getInteriorTableEntries(header, data)
+		for _, entry := range entries {
+			db.walkBtreeTablePages(int(entry.childPage), tableDataPtr)
+		}
+	} else if header.PageType == 0x0d {
+		records := getLeafTableRecords(header, data)
+		*tableDataPtr = append(*tableDataPtr, records...)
+	} else {
+		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+	}
 }
 
 func (db *DbContext) countRows(rootPage int) int {
