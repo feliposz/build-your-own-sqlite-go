@@ -112,14 +112,19 @@ type TableRecord struct {
 	Columns []any
 }
 
+type TableRawRecord struct {
+	Rowid int64
+	Data  []byte
+}
+
 type InteriorTableEntry struct {
 	childPage uint32
 	key       int64
 }
 
 type InteriorIndexEntry struct {
-	childPage uint32
-	key       []any
+	childPage  uint32
+	keyPayload []byte
 }
 
 func readBigEndianUint16(b []byte) uint16 {
@@ -713,20 +718,22 @@ func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue
 func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[]int64) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
-		// TODO: consider retrieving entries "raw" to avoid parsing unneeded entries
 		entries := getInteriorIndexEntries(header, data)
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
 			if mid == len(entries)-1 {
+				// right-most child
 				lo = mid
 				break
-			} else if entries[mid].key[0].(string) == filterValue {
+			}
+			key := parseRecordFormat(entries[mid].keyPayload)
+			if key[0].(string) == filterValue {
 				// NOTE: the interior page itself also point to a valid row that is NOT on the leaf page!
-				*rowids = append(*rowids, entries[mid].key[1].(int64))
+				*rowids = append(*rowids, key[1].(int64))
 				lo = mid
 				break
-			} else if filterValue < entries[mid].key[0].(string) {
+			} else if filterValue < key[0].(string) {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
@@ -737,12 +744,12 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowids)
 		}
 	} else if header.PageType == 0x0a {
-		// TODO: consider retrieving entries "raw" to avoid parsing unneeded records on binary search
-		records := getLeafIndexRecords(header, data)
+		// TODO: consider retrieving entries "raw" to avoid parsing unneeded entries on binary search
+		entries := getLeafIndexEntries(header, data)
 		// TODO: binary search here too!
-		for _, record := range records {
-			if record[0] == filterValue {
-				*rowids = append(*rowids, record[1].(int64))
+		for _, entry := range entries {
+			if entry[0] == filterValue {
+				*rowids = append(*rowids, entry[1].(int64))
 			}
 		}
 	} else {
@@ -765,18 +772,17 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 		payloadSize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
 		keyPayload := page[offset : offset+int(payloadSize)]
-		key := parseRecordFormat(keyPayload)
 		if debugMode {
-			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, key)
+			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, keyPayload)
 		}
-		entries = append(entries, InteriorIndexEntry{leftChildPage, key})
+		entries = append(entries, InteriorIndexEntry{leftChildPage, keyPayload})
 	}
 	entries = append(entries, InteriorIndexEntry{pageHeader.RightMostPointer, nil})
 
 	return
 }
 
-func getLeafIndexRecords(pageHeader PageHeader, page []byte) (records [][]any) {
+func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]any) {
 	// reading each cell pointer array
 	if debugMode {
 		fmt.Printf("cell\tpointer\tkey\n")
@@ -808,10 +814,12 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 		for lo <= hi {
 			mid := (lo + hi) / 2
 			if mid == len(entries)-1 {
+				// right-most child
 				lo = mid
 				break
 			} else if entries[mid].key == rowid {
-				return db.getRecordByRowid(int(entries[mid].childPage), rowid)
+				lo = mid
+				break
 			} else if rowid < entries[mid].key {
 				hi = mid - 1
 			} else {
@@ -821,14 +829,14 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 		return db.getRecordByRowid(int(entries[lo].childPage), rowid)
 
 	} else if header.PageType == 0x0d {
-		// TODO: implement a "raw" version to avoid parsing unneeded records
-		records := getLeafTableRecords(header, data)
-		lo, hi := 0, len(records)-1
+		rawRecords := getLeafTableRawRecords(header, data)
+		lo, hi := 0, len(rawRecords)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
-			if records[mid].Rowid == rowid {
-				return &records[mid]
-			} else if rowid < records[mid].Rowid {
+			if rawRecords[mid].Rowid == rowid {
+				record := parseRecordFormat(rawRecords[mid].Data)
+				return &TableRecord{rowid, record}
+			} else if rowid < rawRecords[mid].Rowid {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
@@ -838,4 +846,20 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 		log.Fatal("unexpected page type when walking btree: ", header.PageType)
 	}
 	return nil
+}
+
+func getLeafTableRawRecords(pageHeader PageHeader, page []byte) (records []TableRawRecord) {
+	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
+		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
+		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
+		offset := int(cellPointer)
+		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
+		offset += bytes
+		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
+		offset += bytes
+		// TODO: not handling overflow!
+		record := page[offset : offset+int(payloadSize)]
+		records = append(records, TableRawRecord{rowid, record})
+	}
+	return
 }
