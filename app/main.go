@@ -802,21 +802,36 @@ func getLeafIndexRecords(pageHeader PageHeader, page []byte) (records [][]any) {
 func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 	header, data := db.getPage(page)
 	if header.PageType == 0x05 {
+
 		entries := getInteriorTableEntries(header, data)
-		// TODO: transform into binary search!
-		for _, entry := range entries {
-			record := db.getRecordByRowid(int(entry.childPage), rowid)
-			if record != nil {
-				return record
+		lo, hi := 0, len(entries)-1
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			if mid == len(entries)-1 {
+				lo = mid
+				break
+			} else if entries[mid].key == rowid {
+				return db.getRecordByRowid(int(entries[mid].childPage), rowid)
+			} else if rowid < entries[mid].key {
+				hi = mid - 1
+			} else {
+				lo = mid + 1
 			}
 		}
+		return db.getRecordByRowid(int(entries[lo].childPage), rowid)
+
 	} else if header.PageType == 0x0d {
 		// TODO: implement a "raw" version to avoid parsing unneeded records
 		records := getLeafTableRecords(header, data)
-		// TODO: transform into binary search!
-		for _, record := range records {
-			if record.Rowid == rowid {
-				return &record
+		lo, hi := 0, len(records)-1
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			if records[mid].Rowid == rowid {
+				return &records[mid]
+			} else if rowid < records[mid].Rowid {
+				hi = mid - 1
+			} else {
+				lo = mid + 1
 			}
 		}
 	} else {
