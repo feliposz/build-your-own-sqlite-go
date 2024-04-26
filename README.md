@@ -1,40 +1,29 @@
-![progress-banner](https://codecrafters.io/landing/images/default_progress_banners/sqlite.png)
+# Build Your Own SQLite
 
-This is a starting point for Go solutions to the
+This is my solution in Go for the
 ["Build Your Own SQLite" Challenge](https://codecrafters.io/challenges/sqlite).
 
-In this challenge, you'll build a barebones SQLite implementation that supports
-basic SQL queries like `SELECT`. Along the way we'll learn about
-[SQLite's file format](https://www.sqlite.org/fileformat.html), how indexed data
-is
-[stored in B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
-and more.
+In this challenge, I have built a barebones SQLite implementation that supports
+basic SQL queries by reading the raw [SQLite's file format](https://www.sqlite.org/fileformat.html),
+filtering using indexes and traversing the [stored B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
+structure and more.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+**Note**: Head over to
+[codecrafters.io](https://app.codecrafters.io/r/comfortable-squirrel-392164) to try the challenge yourself. Use [this link](https://app.codecrafters.io/r/comfortable-squirrel-392164) and get a [one-week free access](https://app.codecrafters.io/r/comfortable-squirrel-392164) (for you and for me too)!
 
-# Passing the first stage
+# Stages
 
-The entry point for your SQLite implementation is in `app/main.go`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+Final implementation passes all stages of [sqlite-tester v47](https://github.com/codecrafters-io/sqlite-tester/releases/tag/v47):
 
-```sh
-git add .
-git commit -m "pass 1st stage" # any msg
-git push origin master
-```
-
-Time to move on to the next stage!
-
-# Stage 2 & beyond
-
-Note: This section is for stages 2 and beyond.
-
-1. Ensure you have `go (1.16+)` installed locally
-1. Run `./your_sqlite3.sh` to run your program, which is implemented in
-   `app/main.go`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+- [x] Print page size
+- [x] Print number of tables
+- [x] Print table names
+- [x] Count rows in a table
+- [x] Read data from a single column
+- [x] Read data from multiple columns
+- [x] Filter data with a WHERE clause
+- [x] Retrieve data using a full-table scan
+- [x] Retrieve data using an index
 
 # Sample Databases
 
