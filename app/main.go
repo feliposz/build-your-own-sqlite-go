@@ -744,19 +744,23 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowids)
 		}
 	} else if header.PageType == 0x0a {
-		// TODO: consider retrieving entries "raw" to avoid parsing unneeded entries on binary search
 		entries := getLeafIndexEntries(header, data)
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
-			if filterValue <= entries[mid][0].(string) {
+			key := parseRecordFormat(entries[mid])
+			if filterValue <= key[0].(string) {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
 			}
 		}
-		for i := lo; i < len(entries) && entries[i][0] == filterValue; i++ {
-			*rowids = append(*rowids, entries[i][1].(int64))
+		for i := lo; i < len(entries); i++ {
+			key := parseRecordFormat(entries[i])
+			if key[0].(string) > filterValue {
+				break
+			}
+			*rowids = append(*rowids, key[1].(int64))
 		}
 	} else {
 		log.Fatal("unexpected page type when walking btree: ", header.PageType)
@@ -788,7 +792,7 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 	return
 }
 
-func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]any) {
+func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]byte) {
 	// reading each cell pointer array
 	if debugMode {
 		fmt.Printf("cell\tpointer\tkey\n")
@@ -801,11 +805,10 @@ func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]any) {
 		payloadSize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
 		keyPayload := page[offset : offset+int(payloadSize)]
-		key := parseRecordFormat(keyPayload)
 		if debugMode {
-			fmt.Printf("%v\t%04x\t%v\n", cell, cellPointer, key)
+			fmt.Printf("%v\t%04x\t%v\n", cell, cellPointer, keyPayload)
 		}
-		records = append(records, key)
+		records = append(records, keyPayload)
 	}
 
 	return
