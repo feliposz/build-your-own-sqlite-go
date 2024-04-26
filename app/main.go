@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	// Available if you need it!
 	// "github.com/xwb1989/sqlparser"
@@ -631,6 +632,8 @@ func (db *DbContext) HandleSelect(query string) {
 	if filterIndexPage == -1 {
 		tableData = db.fullTableScan(rootPage)
 	} else {
+		// TODO: implement multiple-key indexes search
+		// TODO: implement non-string key types
 		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue)
 	}
 
@@ -658,6 +661,16 @@ func (db *DbContext) HandleSelect(query string) {
 
 }
 
+func (db *DbContext) countRows(rootPage int) int {
+	// TODO: traverse b-tree
+	pageHeader, _ := db.getPage(rootPage)
+	// only considering b-tree table leaf pages for now
+	if pageHeader.PageType != 0x0d {
+		log.Fatal("page type not implemented")
+	}
+	return int(pageHeader.CellCount)
+}
+
 func (db *DbContext) fullTableScan(rootPage int) []TableRecord {
 	var tableData []TableRecord
 	db.walkBtreeTablePages(rootPage, &tableData)
@@ -679,35 +692,38 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 	}
 }
 
-func (db *DbContext) countRows(rootPage int) int {
-	// TODO: traverse b-tree
-	pageHeader, _ := db.getPage(rootPage)
-	// only considering b-tree table leaf pages for now
-	if pageHeader.PageType != 0x0d {
-		log.Fatal("page type not implemented")
-	}
-	return int(pageHeader.CellCount)
-}
-
 func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue string) []TableRecord {
-	var rowIds []int64
+	var rowids []int64
 	var tableData []TableRecord
-	db.walkBtreeIndexPages(filterIndexPage, filterValue, &rowIds)
-	fmt.Println(rowIds)
+	db.walkBtreeIndexPages(filterIndexPage, filterValue, &rowids)
+	slices.Sort(rowids)
+	for _, rowid := range rowids {
+		// starting from table root page, binary search for each rowid and retrieve only the filtered records
+		// implement the most dumb form (may retrieve pages multiple times)
+		record := db.getRecordByRowid(rootPage, rowid)
+		if record == nil {
+			log.Fatal("unexpected missing rowid: ", rowid)
+		}
+		tableData = append(tableData, *record)
+	}
+	// TODO: try to come up with a "clever" way to retrieve multiple rowids if present on the same searched page
 	return tableData
 }
 
-func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowIds *[]int64) {
+func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[]int64) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
+		// TODO: consider retrieving entries "raw" to avoid parsing unneeded entries
 		entries := getInteriorIndexEntries(header, data)
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
-			fmt.Println(lo, hi, entries[mid])
-			if mid == len(entries)-1 || entries[mid].key[0].(string) == filterValue {
+			if mid == len(entries)-1 {
+				lo = mid
+				break
+			} else if entries[mid].key[0].(string) == filterValue {
 				// NOTE: the interior page itself also point to a valid row that is NOT on the leaf page!
-				*rowIds = append(*rowIds, entries[mid].key[1].(int64))
+				*rowids = append(*rowids, entries[mid].key[1].(int64))
 				lo = mid
 				break
 			} else if filterValue < entries[mid].key[0].(string) {
@@ -718,14 +734,15 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowIds *[
 		}
 		// TODO: how to properly check for keys that have records on more than one page?
 		for i := lo; i <= lo+1 && i < len(entries); i++ {
-			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowIds)
+			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowids)
 		}
 	} else if header.PageType == 0x0a {
+		// TODO: consider retrieving entries "raw" to avoid parsing unneeded records on binary search
 		records := getLeafIndexRecords(header, data)
 		// TODO: binary search here too!
 		for _, record := range records {
 			if record[0] == filterValue {
-				*rowIds = append(*rowIds, record[1].(int64))
+				*rowids = append(*rowids, record[1].(int64))
 			}
 		}
 	} else {
@@ -780,4 +797,30 @@ func getLeafIndexRecords(pageHeader PageHeader, page []byte) (records [][]any) {
 	}
 
 	return
+}
+
+func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
+	header, data := db.getPage(page)
+	if header.PageType == 0x05 {
+		entries := getInteriorTableEntries(header, data)
+		// TODO: transform into binary search!
+		for _, entry := range entries {
+			record := db.getRecordByRowid(int(entry.childPage), rowid)
+			if record != nil {
+				return record
+			}
+		}
+	} else if header.PageType == 0x0d {
+		// TODO: implement a "raw" version to avoid parsing unneeded records
+		records := getLeafTableRecords(header, data)
+		// TODO: transform into binary search!
+		for _, record := range records {
+			if record.Rowid == rowid {
+				return &record
+			}
+		}
+	} else {
+		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+	}
+	return nil
 }
