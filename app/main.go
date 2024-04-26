@@ -746,11 +746,17 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 	} else if header.PageType == 0x0a {
 		// TODO: consider retrieving entries "raw" to avoid parsing unneeded entries on binary search
 		entries := getLeafIndexEntries(header, data)
-		// TODO: binary search here too!
-		for _, entry := range entries {
-			if entry[0] == filterValue {
-				*rowids = append(*rowids, entry[1].(int64))
+		lo, hi := 0, len(entries)-1
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			if filterValue <= entries[mid][0].(string) {
+				hi = mid - 1
+			} else {
+				lo = mid + 1
 			}
+		}
+		for i := lo; i < len(entries) && entries[i][0] == filterValue; i++ {
+			*rowids = append(*rowids, entries[i][1].(int64))
 		}
 	} else {
 		log.Fatal("unexpected page type when walking btree: ", header.PageType)
