@@ -255,6 +255,7 @@ func (db *DbContext) PrintDbInfo() {
 func (db *DbContext) readSchema() {
 	schemaTableData := db.fullTableScan(1)
 
+	schemaSize := 0
 	schema := []SchemaEntry{}
 	for _, row := range schemaTableData {
 		entry := SchemaEntry{
@@ -278,7 +279,9 @@ func (db *DbContext) readSchema() {
 			entry.Columns, _ = parseColumns(entry.SQL)
 		}
 		schema = append(schema, entry)
+		schemaSize += len(entry.SQL)
 	}
+	db.Info.SchemaSize = uint32(schemaSize)
 	db.Schema = schema
 }
 
