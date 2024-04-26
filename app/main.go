@@ -118,7 +118,7 @@ type InteriorTableEntry struct {
 
 type InteriorIndexEntry struct {
 	childPage uint32
-	key       []byte
+	key       []any
 }
 
 func readBigEndianUint16(b []byte) uint16 {
@@ -417,81 +417,86 @@ func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableR
 
 		// parsing record format
 
-		// determine column type and lenghts from record header
-		recordHeaderSize, bytes := readBigEndianVarint(record)
-		index := bytes
-		columnTypeLengths := [][2]int{}
-		for index < int(recordHeaderSize) {
-			typeCode, bytes := readBigEndianVarint(record[index:recordHeaderSize])
-			var typeLength [2]int
-			switch typeCode {
-			case 0:
-				typeLength = [2]int{0, 0}
-			case 1:
-				typeLength = [2]int{1, 1}
-			case 2:
-				typeLength = [2]int{1, 2}
-			case 3:
-				typeLength = [2]int{1, 3}
-			case 4:
-				typeLength = [2]int{1, 4}
-			case 5:
-				typeLength = [2]int{1, 6}
-			case 6:
-				typeLength = [2]int{1, 8}
-			case 7:
-				typeLength = [2]int{2, 8}
-			case 8:
-				typeLength = [2]int{8, 0}
-			case 9:
-				typeLength = [2]int{9, 0}
-			case 10, 11:
-				typeLength = [2]int{int(typeCode), 1}
-			default:
-				if typeCode < 12 {
-					log.Fatal("invalid column type code: ", typeCode)
-				}
-				if typeCode%2 == 0 {
-					typeLength = [2]int{12, (int(typeCode) - 12) / 2}
-				} else {
-					typeLength = [2]int{13, (int(typeCode) - 13) / 2}
-				}
-			}
-			columnTypeLengths = append(columnTypeLengths, typeLength)
-			index += bytes
-		}
-
-		// reading data according to format/length
-
-		columnData := []any{}
-		for _, typeLength := range columnTypeLengths {
-			switch typeLength[0] {
-			case 0:
-				columnData = append(columnData, nil)
-			case 1:
-				integer := readBigEndianInt(record[index : index+typeLength[1]])
-				columnData = append(columnData, integer)
-			case 2:
-				log.Fatal("float not implemented!")
-			case 8:
-				columnData = append(columnData, int64(0))
-			case 9:
-				columnData = append(columnData, int64(1))
-			case 12:
-				columnData = append(columnData, record[index:index+typeLength[1]])
-			case 13:
-				columnData = append(columnData, string(record[index:index+typeLength[1]]))
-			}
-			index += typeLength[1]
-		}
-		if debugMode {
-			fmt.Printf("%#v\n", columnData)
-		}
+		columnData := parseRecordFormat(record)
 
 		tableData = append(tableData, TableRecord{Rowid: rowid, Columns: columnData})
 	}
 
 	return
+}
+
+func parseRecordFormat(record []byte) []any {
+	// determine column type and lenghts from record header
+	recordHeaderSize, bytes := readBigEndianVarint(record)
+	index := bytes
+	columnTypeLengths := [][2]int{}
+	for index < int(recordHeaderSize) {
+		typeCode, bytes := readBigEndianVarint(record[index:recordHeaderSize])
+		var typeLength [2]int
+		switch typeCode {
+		case 0:
+			typeLength = [2]int{0, 0}
+		case 1:
+			typeLength = [2]int{1, 1}
+		case 2:
+			typeLength = [2]int{1, 2}
+		case 3:
+			typeLength = [2]int{1, 3}
+		case 4:
+			typeLength = [2]int{1, 4}
+		case 5:
+			typeLength = [2]int{1, 6}
+		case 6:
+			typeLength = [2]int{1, 8}
+		case 7:
+			typeLength = [2]int{2, 8}
+		case 8:
+			typeLength = [2]int{8, 0}
+		case 9:
+			typeLength = [2]int{9, 0}
+		case 10, 11:
+			typeLength = [2]int{int(typeCode), 1}
+		default:
+			if typeCode < 12 {
+				log.Fatal("invalid column type code: ", typeCode)
+			}
+			if typeCode%2 == 0 {
+				typeLength = [2]int{12, (int(typeCode) - 12) / 2}
+			} else {
+				typeLength = [2]int{13, (int(typeCode) - 13) / 2}
+			}
+		}
+		columnTypeLengths = append(columnTypeLengths, typeLength)
+		index += bytes
+	}
+
+	// reading data according to format/length
+
+	columnData := []any{}
+	for _, typeLength := range columnTypeLengths {
+		switch typeLength[0] {
+		case 0:
+			columnData = append(columnData, nil)
+		case 1:
+			integer := readBigEndianInt(record[index : index+typeLength[1]])
+			columnData = append(columnData, integer)
+		case 2:
+			log.Fatal("float not implemented!")
+		case 8:
+			columnData = append(columnData, int64(0))
+		case 9:
+			columnData = append(columnData, int64(1))
+		case 12:
+			columnData = append(columnData, record[index:index+typeLength[1]])
+		case 13:
+			columnData = append(columnData, string(record[index:index+typeLength[1]]))
+		}
+		index += typeLength[1]
+	}
+	if debugMode {
+		fmt.Printf("%#v\n", columnData)
+	}
+	return columnData
 }
 
 func (db *DbContext) PrintTables() {
@@ -686,19 +691,32 @@ func (db *DbContext) countRows(rootPage int) int {
 
 func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue string) []TableRecord {
 	var tableData []TableRecord
-	db.walkBtreeIndexPages(filterIndexPage, &tableData)
+	db.walkBtreeIndexPages(filterIndexPage, filterValue, &tableData)
 	return tableData
 }
 
-func (db *DbContext) walkBtreeIndexPages(page int, tableDataPtr *[]TableRecord) {
+func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, tableDataPtr *[]TableRecord) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
 		entries := getInteriorIndexEntries(header, data)
-		// TODO: binary search!
-		for _, entry := range entries {
-			db.walkBtreeIndexPages(int(entry.childPage), tableDataPtr)
+		fmt.Println(entries)
+		lo, hi := 0, len(entries)-1
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			fmt.Println(lo, hi, entries[mid])
+			if mid == len(entries)-1 || entries[mid].key[0].(string) == filterValue {
+				lo = mid
+				break
+			} else if filterValue < entries[mid].key[0].(string) {
+				hi = mid - 1
+			} else {
+				lo = mid + 1
+			}
 		}
+		db.walkBtreeIndexPages(int(entries[lo].childPage), filterValue, tableDataPtr)
 	} else if header.PageType == 0x0a {
+		fmt.Println(page, header)
+		return
 		//records := getLeafIndexRecords(header, data)
 		//*tableDataPtr = append(*tableDataPtr, records...)
 	} else {
@@ -709,7 +727,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, tableDataPtr *[]TableRecord) 
 func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []InteriorIndexEntry) {
 	debugMode := true
 	if debugMode {
-		fmt.Printf("cell\tpointer\tpage\tkey\n")
+		fmt.Printf("cell\tpointer\tpage\tpayload\n")
 	}
 
 	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
@@ -722,11 +740,12 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 		keySize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
 		keyPayload := page[offset : offset+int(keySize)]
+		key := parseRecordFormat(keyPayload)
 		// TODO: parse payload
 		if debugMode {
-			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, keyPayload)
+			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, key)
 		}
-		entries = append(entries, InteriorIndexEntry{leftChildPage, keyPayload})
+		entries = append(entries, InteriorIndexEntry{leftChildPage, key})
 	}
 	entries = append(entries, InteriorIndexEntry{pageHeader.RightMostPointer, nil})
 
