@@ -75,7 +75,7 @@ type DbInfo struct {
 	NumberOfTriggers           uint32
 	NumberOfViews              uint32
 	SchemaSize                 uint32
-	DataVersion                uint32
+	VersionValidForNumber      uint32
 }
 
 type SchemaEntry struct {
@@ -211,7 +211,7 @@ func (db *DbContext) readDbInfo() {
 	info.UserVersion = readBigEndianUint32(header[60:64])
 	info.IncrementalVacuum = readBigEndianUint32(header[64:68])
 	info.ApplicationID = readBigEndianUint32(header[68:72])
-	info.DataVersion = readBigEndianUint32(header[92:96])
+	info.VersionValidForNumber = readBigEndianUint32(header[92:96])
 	info.SoftwareVersion = readBigEndianUint32(header[96:100])
 
 	db.Info = &info
@@ -249,7 +249,6 @@ func (db *DbContext) PrintDbInfo() {
 	fmt.Printf("number of triggers:  %d\n", info.NumberOfTriggers)
 	fmt.Printf("number of views:     %d\n", info.NumberOfViews)
 	fmt.Printf("schema size:         %d\n", info.SchemaSize)
-	fmt.Printf("data version:        %d\n", info.DataVersion)
 }
 
 func (db *DbContext) readSchema() {
