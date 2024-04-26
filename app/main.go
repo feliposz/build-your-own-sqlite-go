@@ -7,8 +7,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	// Available if you need it!
-	// "github.com/xwb1989/sqlparser"
 )
 
 var debugMode bool
@@ -224,11 +222,11 @@ func (db *DbContext) PrintDbInfo() {
 	encodingDescription := "?"
 	switch info.TextEncoding {
 	case 1:
-		encodingDescription = "utf-8"
+		encodingDescription = "utf8"
 	case 2:
-		encodingDescription = "utf-16le"
+		encodingDescription = "utf16le"
 	case 3:
-		encodingDescription = "utf-16be"
+		encodingDescription = "utf16be"
 	}
 	fmt.Printf("database page size:  %d\n", info.DatabasePageSize)
 	fmt.Printf("write format:        %d\n", info.WriteFormat)
@@ -294,6 +292,7 @@ func parseColumns(sql string) ([]ColumnDef, []string) {
 	sql = sql[strings.Index(sql, "(")+1:]
 	sql = sql[:strings.LastIndex(sql, ")")]
 	// TODO: type names can have "," inside them! parse this properly!!!
+	// TODO: handle quoted names
 	for _, columnDefinition := range strings.Split(sql, ",") {
 		columnDefinition = strings.TrimSpace(columnDefinition)
 		parts := strings.Split(columnDefinition, " ")
@@ -378,15 +377,21 @@ func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
 	return
 }
 
+func getCellOffsets(pageHeader PageHeader, page []byte) (offsets []int) {
+	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
+		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
+		cellOffset := int(readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2]))
+		offsets = append(offsets, cellOffset)
+	}
+	return
+}
+
 func getInteriorTableEntries(pageHeader PageHeader, page []byte) (entries []InteriorTableEntry) {
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpage\tkey\n")
 	}
-
-	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
-		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
-		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
-		offset := int(cellPointer)
+	for cell, cellPointer := range getCellOffsets(pageHeader, page) {
+		offset := cellPointer
 		leftChildPage := readBigEndianUint32(page[offset : offset+4])
 		offset += 4
 		key, bytes := readBigEndianVarint(page[offset:])
@@ -407,10 +412,8 @@ func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableR
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpayload\trowid\tcontent\n")
 	}
-	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
-		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
-		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
-		offset := int(cellPointer)
+	for cell, cellPointer := range getCellOffsets(pageHeader, page) {
+		offset := cellPointer
 		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
 		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
@@ -421,10 +424,7 @@ func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableR
 			fmt.Printf("%v\t%04x\t%v\t%v\t", cell, cellPointer, payloadSize, rowid)
 		}
 
-		// parsing record format
-
 		columnData := parseRecordFormat(record)
-
 		tableData = append(tableData, TableRecord{Rowid: rowid, Columns: columnData})
 	}
 
@@ -772,10 +772,8 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 		fmt.Printf("cell\tpointer\tpage\tpayload\n")
 	}
 
-	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
-		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
-		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
-		offset := int(cellPointer)
+	for cell, cellPointer := range getCellOffsets(pageHeader, page) {
+		offset := cellPointer
 		leftChildPage := readBigEndianUint32(page[offset : offset+4])
 		offset += 4
 		// TODO: handle overflow!
@@ -797,10 +795,8 @@ func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]byte) 
 	if debugMode {
 		fmt.Printf("cell\tpointer\tkey\n")
 	}
-	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
-		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
-		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
-		offset := int(cellPointer)
+	for cell, cellPointer := range getCellOffsets(pageHeader, page) {
+		offset := cellPointer
 		// TODO: handle overflow!
 		payloadSize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
@@ -858,10 +854,7 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 }
 
 func getLeafTableRawRecords(pageHeader PageHeader, page []byte) (records []TableRawRecord) {
-	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
-		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
-		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
-		offset := int(cellPointer)
+	for _, offset := range getCellOffsets(pageHeader, page) {
 		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
 		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
