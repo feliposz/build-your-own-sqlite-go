@@ -690,21 +690,24 @@ func (db *DbContext) countRows(rootPage int) int {
 }
 
 func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue string) []TableRecord {
+	var rowIds []int64
 	var tableData []TableRecord
-	db.walkBtreeIndexPages(filterIndexPage, filterValue, &tableData)
+	db.walkBtreeIndexPages(filterIndexPage, filterValue, &rowIds)
+	fmt.Println(rowIds)
 	return tableData
 }
 
-func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, tableDataPtr *[]TableRecord) {
+func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowIds *[]int64) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
 		entries := getInteriorIndexEntries(header, data)
-		fmt.Println(entries)
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
 			fmt.Println(lo, hi, entries[mid])
 			if mid == len(entries)-1 || entries[mid].key[0].(string) == filterValue {
+				// NOTE: the interior page itself also point to a valid row that is NOT on the leaf page!
+				*rowIds = append(*rowIds, entries[mid].key[1].(int64))
 				lo = mid
 				break
 			} else if filterValue < entries[mid].key[0].(string) {
@@ -713,19 +716,24 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, tableData
 				lo = mid + 1
 			}
 		}
-		db.walkBtreeIndexPages(int(entries[lo].childPage), filterValue, tableDataPtr)
+		// TODO: how to properly check for keys that have records on more than one page?
+		for i := lo; i <= lo+1 && i < len(entries); i++ {
+			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowIds)
+		}
 	} else if header.PageType == 0x0a {
-		fmt.Println(page, header)
-		return
-		//records := getLeafIndexRecords(header, data)
-		//*tableDataPtr = append(*tableDataPtr, records...)
+		records := getLeafIndexRecords(header, data)
+		// TODO: binary search here too!
+		for _, record := range records {
+			if record[0] == filterValue {
+				*rowIds = append(*rowIds, record[1].(int64))
+			}
+		}
 	} else {
 		log.Fatal("unexpected page type when walking btree: ", header.PageType)
 	}
 }
 
 func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []InteriorIndexEntry) {
-	debugMode := true
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpage\tpayload\n")
 	}
@@ -737,17 +745,39 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 		leftChildPage := readBigEndianUint32(page[offset : offset+4])
 		offset += 4
 		// TODO: handle overflow!
-		keySize, bytes := readBigEndianVarint(page[offset:])
+		payloadSize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
-		keyPayload := page[offset : offset+int(keySize)]
+		keyPayload := page[offset : offset+int(payloadSize)]
 		key := parseRecordFormat(keyPayload)
-		// TODO: parse payload
 		if debugMode {
 			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, key)
 		}
 		entries = append(entries, InteriorIndexEntry{leftChildPage, key})
 	}
 	entries = append(entries, InteriorIndexEntry{pageHeader.RightMostPointer, nil})
+
+	return
+}
+
+func getLeafIndexRecords(pageHeader PageHeader, page []byte) (records [][]any) {
+	// reading each cell pointer array
+	if debugMode {
+		fmt.Printf("cell\tpointer\tkey\n")
+	}
+	for cell := uint16(0); cell < pageHeader.CellCount; cell++ {
+		cellPointerOffset := pageHeader.CellPointerArrayOffset + uint32(cell*2)
+		cellPointer := readBigEndianUint16(page[cellPointerOffset : cellPointerOffset+2])
+		offset := int(cellPointer)
+		// TODO: handle overflow!
+		payloadSize, bytes := readBigEndianVarint(page[offset:])
+		offset += bytes
+		keyPayload := page[offset : offset+int(payloadSize)]
+		key := parseRecordFormat(keyPayload)
+		if debugMode {
+			fmt.Printf("%v\t%04x\t%v\n", cell, cellPointer, key)
+		}
+		records = append(records, key)
+	}
 
 	return
 }
