@@ -580,35 +580,39 @@ func (db *DbContext) HandleSelect(query string) {
 		log.Fatal("no such table:", queryTableName)
 	}
 
-	// TODO: this will not work when WHERE clause is used, must process records
-	if strings.EqualFold(queryColumnNames[0], "COUNT(*)") {
-		rowCount := db.countRows(rootPage)
-		fmt.Println(rowCount)
-		return
-	}
-
-	// replace "*" with the names for the table columns
-	if len(queryColumnNames) == 1 && queryColumnNames[0] == "*" {
-		queryColumnNames = nil
-		for _, column := range tableColumns {
-			queryColumnNames = append(queryColumnNames, column.Name)
-		}
-	}
-
-	// translate the column names from the query to the column numbers
-
 	queryColumnNumbers := []int{}
-	for _, queryColumnName := range queryColumnNames {
-		found := false
-		for number, column := range tableColumns {
-			if strings.EqualFold(queryColumnName, column.Name) {
-				queryColumnNumbers = append(queryColumnNumbers, number)
-				found = true
-				break
+
+	countingOnly := strings.EqualFold(queryColumnNames[0], "COUNT(*)")
+
+	// use a fast count if no filter is used to avoid processing all data
+	if countingOnly {
+		if filterColumnName == "" {
+			rowCount := db.fastCountRows(rootPage)
+			fmt.Println(rowCount)
+			return
+		}
+	} else {
+		// replace "*" with the names for the table columns
+		if len(queryColumnNames) == 1 && queryColumnNames[0] == "*" {
+			queryColumnNames = nil
+			for _, column := range tableColumns {
+				queryColumnNames = append(queryColumnNames, column.Name)
 			}
 		}
-		if !found {
-			log.Fatal("no such column:", queryColumnName)
+
+		// translate the column names from the query to the column numbers
+		for _, queryColumnName := range queryColumnNames {
+			found := false
+			for number, column := range tableColumns {
+				if strings.EqualFold(queryColumnName, column.Name) {
+					queryColumnNumbers = append(queryColumnNumbers, number)
+					found = true
+					break
+				}
+			}
+			if !found {
+				log.Fatal("no such column:", queryColumnName)
+			}
 		}
 	}
 
@@ -644,8 +648,13 @@ func (db *DbContext) HandleSelect(query string) {
 		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue)
 	}
 
+	rowCount := 0
 	for _, tableRow := range tableData {
 		if filterColumnNumber >= 0 && tableRow.Columns[filterColumnNumber] != filterValue {
+			continue
+		}
+		if countingOnly {
+			rowCount++
 			continue
 		}
 		for i, columnNumber := range queryColumnNumbers {
@@ -666,16 +675,26 @@ func (db *DbContext) HandleSelect(query string) {
 		fmt.Println()
 	}
 
+	if countingOnly {
+		fmt.Println(rowCount)
+	}
 }
 
-func (db *DbContext) countRows(rootPage int) int {
-	// TODO: traverse b-tree
-	pageHeader, _ := db.getPage(rootPage)
-	// only considering b-tree table leaf pages for now
-	if pageHeader.PageType != 0x0d {
-		log.Fatal("page type not implemented")
+func (db *DbContext) fastCountRows(page int) int {
+	header, data := db.getPage(page)
+	if header.PageType == 0x05 {
+		totalCount := 0
+		entries := getInteriorTableEntries(header, data)
+		for _, entry := range entries {
+			totalCount += db.fastCountRows(int(entry.childPage))
+		}
+		return totalCount
+	} else if header.PageType == 0x0d {
+		return int(header.CellCount)
+	} else {
+		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+		return 0
 	}
-	return int(pageHeader.CellCount)
 }
 
 func (db *DbContext) fullTableScan(rootPage int) []TableRecord {
