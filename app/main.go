@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf16"
 )
 
 var debugMode bool
@@ -262,7 +264,9 @@ func (db *DbContext) readSchema() {
 			Name:      row.Columns[1].(string),
 			TableName: row.Columns[2].(string),
 			RootPage:  int(row.Columns[3].(int64)),
-			SQL:       row.Columns[4].(string),
+		}
+		if sql, ok := row.Columns[4].(string); ok {
+			entry.SQL = sql
 		}
 		switch entry.Type {
 		case "table":
@@ -284,9 +288,10 @@ func (db *DbContext) readSchema() {
 	db.Schema = schema
 }
 
-func parseColumns(sql string) ([]ColumnDef, []string) {
-	columns := []ColumnDef{}
-	constraints := []string{}
+func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
+	if sql == "" {
+		return
+	}
 	if !strings.HasPrefix(sql, "CREATE") {
 		log.Fatal("invalid DDL statement")
 	}
@@ -313,12 +318,12 @@ func parseColumns(sql string) ([]ColumnDef, []string) {
 			columns = append(columns, column)
 		}
 	}
-	return columns, constraints
+	return
 }
 
 func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
 	info := db.Info
-	if pageNumber < 1 || pageNumber > int(info.DatabasePageCount) {
+	if pageNumber < 1 {
 		log.Fatal("invalid page number:", pageNumber)
 	}
 
@@ -408,7 +413,7 @@ func getInteriorTableEntries(pageHeader PageHeader, page []byte) (entries []Inte
 	return
 }
 
-func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableRecord) {
+func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableRecord) {
 
 	// reading each cell pointer array
 	if debugMode {
@@ -426,14 +431,14 @@ func getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableR
 			fmt.Printf("%v\t%04x\t%v\t%v\t", cell, cellPointer, payloadSize, rowid)
 		}
 
-		columnData := parseRecordFormat(record)
+		columnData := db.parseRecordFormat(record)
 		tableData = append(tableData, TableRecord{Rowid: rowid, Columns: columnData})
 	}
 
 	return
 }
 
-func parseRecordFormat(record []byte) []any {
+func (db *DbContext) parseRecordFormat(record []byte) []any {
 	// determine column type and lenghts from record header
 	recordHeaderSize, bytes := readBigEndianVarint(record)
 	index := bytes
@@ -497,7 +502,24 @@ func parseRecordFormat(record []byte) []any {
 		case 12:
 			columnData = append(columnData, record[index:index+typeLength[1]])
 		case 13:
-			columnData = append(columnData, string(record[index:index+typeLength[1]]))
+			switch db.Info.TextEncoding {
+			case 1: // utf-8
+				columnData = append(columnData, string(record[index:index+typeLength[1]]))
+			case 2: // utf-16 big endian
+				utf16str := []uint16{}
+				for i := index; i < index+typeLength[1]; i += 2 {
+					utf16str = append(utf16str, binary.LittleEndian.Uint16(record[i:i+2]))
+				}
+				columnData = append(columnData, string(utf16.Decode(utf16str)))
+			case 3: // utf-16 big endian
+				utf16str := []uint16{}
+				for i := index; i < index+typeLength[1]; i += 2 {
+					utf16str = append(utf16str, binary.BigEndian.Uint16(record[i:i+2]))
+				}
+				columnData = append(columnData, string(utf16.Decode(utf16str)))
+			default:
+				log.Fatal("unknown text encoding: ", db.Info.TextEncoding)
+			}
 		}
 		index += typeLength[1]
 	}
@@ -711,7 +733,7 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 			db.walkBtreeTablePages(int(entry.childPage), tableDataPtr)
 		}
 	} else if header.PageType == 0x0d {
-		records := getLeafTableRecords(header, data)
+		records := db.getLeafTableRecords(header, data)
 		*tableDataPtr = append(*tableDataPtr, records...)
 	} else {
 		log.Fatal("unexpected page type when walking btree: ", header.PageType)
@@ -748,7 +770,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 				lo = mid
 				break
 			}
-			key := parseRecordFormat(entries[mid].keyPayload)
+			key := db.parseRecordFormat(entries[mid].keyPayload)
 			if key[0].(string) == filterValue {
 				// NOTE: the interior page itself also point to a valid row that is NOT on the leaf page!
 				*rowids = append(*rowids, key[1].(int64))
@@ -769,7 +791,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
-			key := parseRecordFormat(entries[mid])
+			key := db.parseRecordFormat(entries[mid])
 			if filterValue <= key[0].(string) {
 				hi = mid - 1
 			} else {
@@ -777,7 +799,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 			}
 		}
 		for i := lo; i < len(entries); i++ {
-			key := parseRecordFormat(entries[i])
+			key := db.parseRecordFormat(entries[i])
 			if key[0].(string) > filterValue {
 				break
 			}
@@ -860,7 +882,7 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 		for lo <= hi {
 			mid := (lo + hi) / 2
 			if rawRecords[mid].Rowid == rowid {
-				record := parseRecordFormat(rawRecords[mid].Data)
+				record := db.parseRecordFormat(rawRecords[mid].Data)
 				return &TableRecord{rowid, record}
 			} else if rowid < rawRecords[mid].Rowid {
 				hi = mid - 1
