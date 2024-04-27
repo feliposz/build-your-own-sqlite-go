@@ -552,29 +552,7 @@ func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (ta
 		offset += bytes
 		var record []byte
 		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
-			chunkSize, remainingSize := db.calcOverflowSizes(pageHeader, payloadSize)
-			record = slices.Clone(page[offset : offset+int(chunkSize)])
-			overflowPage := int(readBigEndianUint32(page[offset+int(chunkSize):]))
-			if debugMode {
-				fmt.Fprintf(os.Stderr, "total payload size: %d\n", payloadSize)
-				fmt.Fprintf(os.Stderr, "min/max: %d - %d\n", pageHeader.MinOverflowPayloadSize, pageHeader.MaxOverflowPayloadSize)
-				fmt.Fprintf(os.Stderr, "chunk/remaining: %d - %d\n", chunkSize, remainingSize)
-				fmt.Fprintf(os.Stderr, "overflow first page: %d\n", overflowPage)
-				// fmt.Fprintf(os.Stderr, "this chunk data: %q\n", record)
-			}
-			for overflowPage != 0 {
-				next, data := db.getOverflowPage(overflowPage)
-				size := min(int64(len(data)), remainingSize)
-				record = append(record, data[:size]...)
-				remainingSize -= size
-				if next == 0 && remainingSize > 0 {
-					log.Fatal("missing link on overflow chain!")
-				}
-				if next != 0 && remainingSize == 0 {
-					log.Fatal("unexpected next link on overflow chain")
-				}
-				overflowPage = next
-			}
+			record = db.getDataWithOverflow(pageHeader, page, offset, payloadSize)
 		} else {
 			record = page[offset : offset+int(payloadSize)]
 		}
@@ -586,6 +564,33 @@ func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (ta
 		tableData = append(tableData, TableRecord{Rowid: rowid, Columns: columnData})
 	}
 
+	return
+}
+
+func (db *DbContext) getDataWithOverflow(pageHeader PageHeader, page []byte, offset int, payloadSize int64) (record []byte) {
+	chunkSize, remainingSize := db.calcOverflowSizes(pageHeader, payloadSize)
+	record = slices.Clone(page[offset : offset+int(chunkSize)])
+	overflowPage := int(readBigEndianUint32(page[offset+int(chunkSize):]))
+	if debugMode {
+		fmt.Fprintf(os.Stderr, "total payload size: %d\n", payloadSize)
+		fmt.Fprintf(os.Stderr, "min/max: %d - %d\n", pageHeader.MinOverflowPayloadSize, pageHeader.MaxOverflowPayloadSize)
+		fmt.Fprintf(os.Stderr, "chunk/remaining: %d - %d\n", chunkSize, remainingSize)
+		fmt.Fprintf(os.Stderr, "overflow first page: %d\n", overflowPage)
+		// fmt.Fprintf(os.Stderr, "this chunk data: %q\n", record)
+	}
+	for overflowPage != 0 {
+		next, data := db.getOverflowPage(overflowPage)
+		size := min(int64(len(data)), remainingSize)
+		record = append(record, data[:size]...)
+		remainingSize -= size
+		if next == 0 && remainingSize > 0 {
+			log.Fatal("missing link on overflow chain!")
+		}
+		if next != 0 && remainingSize == 0 {
+			log.Fatal("unexpected next link on overflow chain")
+		}
+		overflowPage = next
+	}
 	return
 }
 
@@ -970,7 +975,7 @@ func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue
 func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[]int64) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
-		entries := getInteriorIndexEntries(header, data)
+		entries := db.getInteriorIndexEntries(header, data)
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
@@ -996,7 +1001,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowids)
 		}
 	} else if header.PageType == 0x0a {
-		entries := getLeafIndexEntries(header, data)
+		entries := db.getLeafIndexEntries(header, data)
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
@@ -1019,7 +1024,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 	}
 }
 
-func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []InteriorIndexEntry) {
+func (db *DbContext) getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []InteriorIndexEntry) {
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpage\tpayload\n")
 	}
@@ -1029,11 +1034,13 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 		leftChildPage := readBigEndianUint32(page[offset : offset+4])
 		offset += 4
 		payloadSize, bytes := readBigEndianVarint(page[offset:])
-		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
-			log.Fatal("overflow not implemented for getInteriorIndexEntries")
-		}
 		offset += bytes
-		keyPayload := page[offset : offset+int(payloadSize)]
+		var keyPayload []byte
+		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
+			keyPayload = db.getDataWithOverflow(pageHeader, page, offset, payloadSize)
+		} else {
+			keyPayload = page[offset : offset+int(payloadSize)]
+		}
 		if debugMode {
 			fmt.Printf("%v\t%04x\t%v\t%q\n", cell, cellPointer, leftChildPage, keyPayload)
 		}
@@ -1044,7 +1051,7 @@ func getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []Inte
 	return
 }
 
-func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]byte) {
+func (db *DbContext) getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]byte) {
 	// reading each cell pointer array
 	if debugMode {
 		fmt.Printf("cell\tpointer\tkey\n")
@@ -1052,11 +1059,13 @@ func getLeafIndexEntries(pageHeader PageHeader, page []byte) (records [][]byte) 
 	for cell, cellPointer := range getCellOffsets(pageHeader, page) {
 		offset := cellPointer
 		payloadSize, bytes := readBigEndianVarint(page[offset:])
-		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
-			log.Fatal("overflow not implemented for getLeafIndexEntries")
-		}
 		offset += bytes
-		keyPayload := page[offset : offset+int(payloadSize)]
+		var keyPayload []byte
+		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
+			keyPayload = db.getDataWithOverflow(pageHeader, page, offset, payloadSize)
+		} else {
+			keyPayload = page[offset : offset+int(payloadSize)]
+		}
 		if debugMode {
 			fmt.Printf("%v\t%04x\t%v\n", cell, cellPointer, keyPayload)
 		}
@@ -1090,7 +1099,7 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 		return db.getRecordByRowid(int(entries[lo].childPage), rowid)
 
 	} else if header.PageType == 0x0d {
-		rawRecords := getLeafTableRawRecords(header, data)
+		rawRecords := db.getLeafTableRawRecords(header, data)
 		lo, hi := 0, len(rawRecords)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
@@ -1109,16 +1118,18 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 	return nil
 }
 
-func getLeafTableRawRecords(pageHeader PageHeader, page []byte) (records []TableRawRecord) {
+func (db *DbContext) getLeafTableRawRecords(pageHeader PageHeader, page []byte) (records []TableRawRecord) {
 	for _, offset := range getCellOffsets(pageHeader, page) {
 		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
 		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
+		var record []byte
 		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
-			log.Fatal("overflow not implemented for getLeafTableRawRecords")
+			record = db.getDataWithOverflow(pageHeader, page, offset, payloadSize)
+		} else {
+			record = page[offset : offset+int(payloadSize)]
 		}
-		record := page[offset : offset+int(payloadSize)]
 		records = append(records, TableRawRecord{rowid, record})
 	}
 	return
