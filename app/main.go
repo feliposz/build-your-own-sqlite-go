@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -763,13 +765,24 @@ func (db *DbContext) HandleSelect(query string) {
 		log.Fatal("syntax error")
 	}
 
-	var filterColumnName, filterValue string
+	var filterColumnName string
+	var filterValue any
 	if wherePos == -1 {
 		wherePos = len(query)
 	} else {
-		whereParts := strings.Split(query[wherePos+5:], "=")
+		whereParts := strings.SplitN(query[wherePos+5:], "=", 2)
 		filterColumnName = strings.TrimSpace(whereParts[0])
-		filterValue = strings.Trim(strings.TrimSpace(whereParts[1]), "'")
+		value := strings.TrimSpace(whereParts[1])
+		if value[0] == '\'' {
+			filterValue = strings.Trim(value, "'")
+		} else {
+			var err error
+			filterValue, err = strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				panic(err)
+			}
+		}
+
 	}
 
 	queryTableName := strings.TrimSpace(query[fromPos+4 : wherePos])
@@ -867,7 +880,6 @@ func (db *DbContext) HandleSelect(query string) {
 		tableData = db.fullTableScan(rootPage)
 	} else {
 		// TODO: implement multiple-key indexes search
-		// TODO: implement non-string key types
 		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue)
 	}
 
@@ -887,7 +899,7 @@ outer:
 
 	rowCount := 0
 	for _, tableRow := range tableData {
-		if filterColumnNumber >= 0 && tableRow.Columns[filterColumnNumber] != filterValue {
+		if filterColumnNumber >= 0 && compareAny(tableRow.Columns[filterColumnNumber], filterValue) != 0 {
 			continue
 		}
 		if countingOnly {
@@ -906,6 +918,10 @@ outer:
 			}
 			if data == nil && columnNumber == aliasedPKColumnNumber {
 				data = tableRow.Rowid
+			}
+			// BLOB conversion for displaying
+			if bytes, ok := data.([]byte); ok {
+				data = string(bytes)
 			}
 			fmt.Print(data)
 		}
@@ -955,7 +971,7 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 	}
 }
 
-func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue string) []TableRecord {
+func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue any) []TableRecord {
 	var rowids []int64
 	var tableData []TableRecord
 	db.walkBtreeIndexPages(filterIndexPage, filterValue, &rowids)
@@ -973,7 +989,7 @@ func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue
 	return tableData
 }
 
-func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[]int64) {
+func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, rowids *[]int64) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
 		entries := db.getInteriorIndexEntries(header, data)
@@ -986,12 +1002,12 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 				break
 			}
 			key := db.parseRecordFormat(entries[mid].keyPayload)
-			if key[0].(string) == filterValue {
+			if compareAny(key[0], filterValue) == 0 {
 				// NOTE: the interior page itself also point to a valid row that is NOT on the leaf page!
 				*rowids = append(*rowids, key[1].(int64))
 				lo = mid
 				break
-			} else if filterValue < key[0].(string) {
+			} else if compareAny(filterValue, key[0]) < 0 {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
@@ -1007,7 +1023,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 		for lo <= hi {
 			mid := (lo + hi) / 2
 			key := db.parseRecordFormat(entries[mid])
-			if filterValue <= key[0].(string) {
+			if compareAny(filterValue, key[0]) <= 0 {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
@@ -1015,7 +1031,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 		}
 		for i := lo; i < len(entries); i++ {
 			key := db.parseRecordFormat(entries[i])
-			if key[0].(string) > filterValue {
+			if compareAny(key[0], filterValue) > 0 {
 				break
 			}
 			*rowids = append(*rowids, key[1].(int64))
@@ -1023,6 +1039,32 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue string, rowids *[
 	} else {
 		log.Fatal("unexpected page type when walking btree: ", header.PageType)
 	}
+}
+
+func compareAny(a any, b any) int {
+	switch a.(type) {
+	case string:
+		switch b.(type) {
+		case string:
+			return cmp.Compare(a.(string), b.(string))
+		case []byte:
+			return cmp.Compare(a.(string), string(b.([]byte)))
+		}
+	case int64:
+		switch b.(type) {
+		case int64:
+			return cmp.Compare(a.(int64), b.(int64))
+		}
+	case []byte:
+		switch b.(type) {
+		case string:
+			return cmp.Compare(string(a.([]byte)), b.(string))
+		case []byte:
+			return slices.Compare(a.([]byte), b.([]byte))
+		}
+	}
+	log.Fatalf("comparison not implemented: %T and %T", a, b)
+	return -1
 }
 
 func (db *DbContext) getInteriorIndexEntries(pageHeader PageHeader, page []byte) (entries []InteriorIndexEntry) {
