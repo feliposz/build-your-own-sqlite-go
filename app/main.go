@@ -811,25 +811,24 @@ func (db *DbContext) HandleSelect(query string) {
 	} else {
 		// replace "*" with the names for the table columns
 		if len(queryColumnNames) == 1 && queryColumnNames[0] == "*" {
-			queryColumnNames = nil
-			for _, column := range tableColumns {
-				queryColumnNames = append(queryColumnNames, column.Name)
+			for number := range tableColumns {
+				queryColumnNumbers = append(queryColumnNumbers, number)
 			}
-		}
-
-		// translate the column names from the query to the column numbers
-		for _, queryColumnName := range queryColumnNames {
-			found := false
-			for number, column := range tableColumns {
-				if strings.EqualFold(queryColumnName, column.Name) {
-					queryColumnNumbers = append(queryColumnNumbers, number)
-					found = true
-					break
+		} else {
+			// translate the column names from the query to the column numbers
+			for _, queryColumnName := range queryColumnNames {
+				found := false
+				for number, column := range tableColumns {
+					if strings.EqualFold(queryColumnName, column.Name) {
+						queryColumnNumbers = append(queryColumnNumbers, number)
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
+				if !found {
 
-				log.Fatal("no such column: ", queryColumnName)
+					log.Fatal("no such column: ", queryColumnName)
+				}
 			}
 		}
 	}
@@ -893,7 +892,12 @@ outer:
 			if i > 0 {
 				fmt.Print("|")
 			}
-			data := tableRow.Columns[columnNumber]
+			var data any
+			if columnNumber < len(tableRow.Columns) {
+				data = tableRow.Columns[columnNumber]
+			} else {
+				// TODO: Implement default value (https://www.sqlite.org/lang_createtable.html#dfltval)
+			}
 			if data == nil && columnNumber == aliasedPKColumnNumber {
 				data = tableRow.Rowid
 			}
