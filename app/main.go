@@ -853,6 +853,7 @@ func (db *DbContext) HandleSelect(query string) {
 
 	filterColumnNumber := -1
 	filterIndexPage := -1
+	indexSortOrder := 1
 	if filterColumnName != "" {
 		found := false
 		for number, column := range tableColumns {
@@ -870,6 +871,9 @@ func (db *DbContext) HandleSelect(query string) {
 			if entry.Type == "index" && strings.EqualFold(queryTableName, entry.TableName) &&
 				len(entry.Columns) > 0 && strings.EqualFold(filterColumnName, entry.Columns[0].Name) {
 				filterIndexPage = entry.RootPage
+				if strings.EqualFold(entry.Columns[0].Type, "DESC") {
+					indexSortOrder = -1
+				}
 				break
 			}
 		}
@@ -880,7 +884,7 @@ func (db *DbContext) HandleSelect(query string) {
 		tableData = db.fullTableScan(rootPage)
 	} else {
 		// TODO: implement multiple-key indexes search
-		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue)
+		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue, indexSortOrder)
 	}
 
 	// integer primary keys are stored as null and aliased with the rowid
@@ -971,10 +975,10 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 	}
 }
 
-func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue any) []TableRecord {
+func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue any, indexSortOrder int) []TableRecord {
 	var rowids []int64
 	var tableData []TableRecord
-	db.walkBtreeIndexPages(filterIndexPage, filterValue, &rowids)
+	db.walkBtreeIndexPages(filterIndexPage, filterValue, indexSortOrder, &rowids)
 	slices.Sort(rowids)
 	for _, rowid := range rowids {
 		// starting from table root page, binary search for each rowid and retrieve only the filtered records
@@ -989,7 +993,7 @@ func (db *DbContext) indexedTableScan(rootPage, filterIndexPage int, filterValue
 	return tableData
 }
 
-func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, rowids *[]int64) {
+func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, indexSortOrder int, rowids *[]int64) {
 	header, data := db.getPage(page)
 	if header.PageType == 0x02 {
 		entries := db.getInteriorIndexEntries(header, data)
@@ -1007,7 +1011,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, rowids *[]in
 				*rowids = append(*rowids, key[1].(int64))
 				lo = mid
 				break
-			} else if compareAny(filterValue, key[0]) < 0 {
+			} else if indexSortOrder*compareAny(filterValue, key[0]) < 0 {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
@@ -1015,7 +1019,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, rowids *[]in
 		}
 		// TODO: how to properly check for keys that have records on more than one page?
 		for i := lo; i <= lo+1 && i < len(entries); i++ {
-			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, rowids)
+			db.walkBtreeIndexPages(int(entries[i].childPage), filterValue, indexSortOrder, rowids)
 		}
 	} else if header.PageType == 0x0a {
 		entries := db.getLeafIndexEntries(header, data)
@@ -1023,7 +1027,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, rowids *[]in
 		for lo <= hi {
 			mid := (lo + hi) / 2
 			key := db.parseRecordFormat(entries[mid])
-			if compareAny(filterValue, key[0]) <= 0 {
+			if indexSortOrder*compareAny(filterValue, key[0]) <= 0 {
 				hi = mid - 1
 			} else {
 				lo = mid + 1
@@ -1031,7 +1035,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, rowids *[]in
 		}
 		for i := lo; i < len(entries); i++ {
 			key := db.parseRecordFormat(entries[i])
-			if compareAny(key[0], filterValue) > 0 {
+			if indexSortOrder*compareAny(key[0], filterValue) > 0 {
 				break
 			}
 			*rowids = append(*rowids, key[1].(int64))
