@@ -197,7 +197,7 @@ func (db *DbContext) readDbInfo() {
 
 	pageSize := readBigEndianUint16(header[16:18])
 	info.DatabasePageSize = int(pageSize)
-	if pageSize == 0 {
+	if pageSize == 1 {
 		info.DatabasePageSize = 65536
 	}
 
@@ -948,10 +948,12 @@ func (db *DbContext) fastCountRows(page int) int {
 		return totalCount
 	} else if header.PageType == 0x0d {
 		return int(header.CellCount)
+	} else if header.PageType == 0x02 {
+		log.Fatal("table without rowid not implemented!")
 	} else {
-		log.Fatal("unexpected page type when walking btree: ", header.PageType)
-		return 0
+		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
 	}
+	return 0
 }
 
 func (db *DbContext) fullTableScan(rootPage int) []TableRecord {
@@ -970,8 +972,10 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 	} else if header.PageType == 0x0d {
 		records := db.getLeafTableRecords(header, data)
 		*tableDataPtr = append(*tableDataPtr, records...)
+	} else if header.PageType == 0x02 {
+		log.Fatal("table without rowid not implemented!")
 	} else {
-		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
 	}
 }
 
@@ -1006,6 +1010,9 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, indexSortOrd
 				break
 			}
 			key := db.parseRecordFormat(entries[mid].keyPayload)
+			if len(key) > 2 {
+				log.Fatal("multi-key index not implemented!")
+			}
 			if compareAny(key[0], filterValue) == 0 {
 				// NOTE: the interior page itself also point to a valid row that is NOT on the leaf page!
 				*rowids = append(*rowids, key[1].(int64))
@@ -1041,7 +1048,7 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, indexSortOrd
 			*rowids = append(*rowids, key[1].(int64))
 		}
 	} else {
-		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+		log.Fatal("unexpected page type when walking index btree: ", header.PageType)
 	}
 }
 
@@ -1159,8 +1166,10 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 				lo = mid + 1
 			}
 		}
+	} else if header.PageType == 0x02 {
+		log.Fatal("table without rowid not implemented!")
 	} else {
-		log.Fatal("unexpected page type when walking btree: ", header.PageType)
+		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
 	}
 	return nil
 }
