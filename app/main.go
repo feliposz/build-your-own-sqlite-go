@@ -753,6 +753,20 @@ func (db *DbContext) HandleSelect(query string) {
 		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue)
 	}
 
+	// integer primary keys are stored as null and aliased with the rowid
+	aliasedPKColumnNumber := -1
+outer:
+	for columnNumber, columnDef := range tableColumns {
+		if strings.EqualFold(columnDef.Type, "integer") && len(columnDef.Constraints) > 0 {
+			for _, constraint := range columnDef.Constraints {
+				if strings.EqualFold(constraint, "primary") {
+					aliasedPKColumnNumber = columnNumber
+					break outer
+				}
+			}
+		}
+	}
+
 	rowCount := 0
 	for _, tableRow := range tableData {
 		if filterColumnNumber >= 0 && tableRow.Columns[filterColumnNumber] != filterValue {
@@ -767,13 +781,8 @@ func (db *DbContext) HandleSelect(query string) {
 				fmt.Print("|")
 			}
 			data := tableRow.Columns[columnNumber]
-			if data == nil {
-				columnDef := tableColumns[columnNumber]
-				// autoincrement integer primary keys are stored as null and aliased with the rowid
-				// TODO: properly check for primary key and do this only once, not for every row!!!
-				if strings.EqualFold(columnDef.Type, "integer") && len(columnDef.Constraints) > 0 && strings.EqualFold(columnDef.Constraints[0], "primary") {
-					data = tableRow.Rowid
-				}
+			if data == nil && columnNumber == aliasedPKColumnNumber {
+				data = tableRow.Rowid
 			}
 			fmt.Print(data)
 		}
