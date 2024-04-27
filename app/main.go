@@ -605,12 +605,14 @@ func (db *DbContext) parseRecordFormat(record []byte) []any {
 }
 
 func (db *DbContext) PrintTables() {
+	tables := []string{}
 	for _, entry := range db.Schema {
-		if entry.Type == "table" && !strings.HasPrefix(entry.Name, "sqlite_") {
-			fmt.Print(entry.Name, " ")
+		if (entry.Type == "table" || entry.Type == "view") && !strings.HasPrefix(entry.Name, "sqlite_") {
+			tables = append(tables, entry.Name)
 		}
 	}
-	fmt.Println()
+	slices.Sort(tables)
+	fmt.Println(strings.Join(tables, " "))
 }
 
 func (db *DbContext) PrintIndexes() {
@@ -624,7 +626,9 @@ func (db *DbContext) PrintIndexes() {
 
 func (db *DbContext) PrintSchema() {
 	for _, entry := range db.Schema {
-		fmt.Println(entry.SQL)
+		if entry.SQL != "" {
+			fmt.Printf("%s;\n", entry.SQL)
+		}
 	}
 }
 
