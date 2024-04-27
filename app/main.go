@@ -854,7 +854,8 @@ func (db *DbContext) HandleSelect(query string) {
 		}
 
 		for _, entry := range db.Schema {
-			if entry.Type == "index" && strings.EqualFold(queryTableName, entry.TableName) && strings.EqualFold(filterColumnName, entry.Columns[0].Name) {
+			if entry.Type == "index" && strings.EqualFold(queryTableName, entry.TableName) &&
+				len(entry.Columns) > 0 && strings.EqualFold(filterColumnName, entry.Columns[0].Name) {
 				filterIndexPage = entry.RootPage
 				break
 			}
