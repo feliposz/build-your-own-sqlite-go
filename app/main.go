@@ -78,6 +78,7 @@ type DbInfo struct {
 	NumberOfViews              uint32
 	SchemaSize                 uint32
 	VersionValidForNumber      uint32
+	UsablePageSize             uint32
 }
 
 type SchemaEntry struct {
@@ -105,6 +106,8 @@ type PageHeader struct {
 	CellPointerArrayOffset uint32
 	RightMostPointer       uint32
 	UnallocatedRegionSize  uint32
+	MinOverflowPayloadSize uint32
+	MaxOverflowPayloadSize uint32
 }
 
 type TableRecord struct {
@@ -215,6 +218,7 @@ func (db *DbContext) readDbInfo() {
 	info.ApplicationID = readBigEndianUint32(header[68:72])
 	info.VersionValidForNumber = readBigEndianUint32(header[92:96])
 	info.SoftwareVersion = readBigEndianUint32(header[96:100])
+	info.UsablePageSize = uint32(info.DatabasePageSize - int(info.ReservedBytes))
 
 	db.Info = &info
 }
@@ -295,9 +299,13 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 	if !strings.HasPrefix(sql, "CREATE") {
 		log.Fatal("invalid DDL statement")
 	}
+	leftParen := strings.Index(sql, "(") + 1
+	rightParen := strings.LastIndex(sql, ")")
+	if leftParen < 0 || rightParen < 0 {
+		return
+	}
 	// remove everything before first "(" and last ")"
-	sql = sql[strings.Index(sql, "(")+1:]
-	sql = sql[:strings.LastIndex(sql, ")")]
+	sql = sql[leftParen+1 : rightParen]
 	// TODO: type names can have "," inside them! parse this properly!!!
 	// TODO: handle quoted names
 	for _, columnDefinition := range strings.Split(sql, ",") {
@@ -344,12 +352,18 @@ func (db *DbContext) getPage(pageNumber int) (header PageHeader, page []byte) {
 		log.Fatal(err)
 	}
 
+	// These constants and calculations are described in detail on the spec
+	// https://www.sqlite.org/fileformat2.html#b_tree_pages
+	header.MinOverflowPayloadSize = ((info.UsablePageSize - 12) * 32 / 255) - 23
+
 	header.PageType = page[pageOffset]
 	switch header.PageType {
-	case 0x02, 0x05, 0x0a, 0x0d:
-		// ok
+	case 0x02, 0x0a:
+		header.MaxOverflowPayloadSize = ((info.UsablePageSize - 12) * 64 / 255) - 23
+	case 0x05, 0x0d:
+		header.MaxOverflowPayloadSize = info.UsablePageSize - 35
 	default:
-		log.Fatal("invalid page type:", header.PageType)
+		log.Fatal("page ", pageNumber, " has invalid type: ", header.PageType)
 	}
 
 	// parsing b-tree page header
@@ -414,8 +428,6 @@ func getInteriorTableEntries(pageHeader PageHeader, page []byte) (entries []Inte
 }
 
 func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (tableData []TableRecord) {
-
-	// reading each cell pointer array
 	if debugMode {
 		fmt.Printf("cell\tpointer\tpayload\trowid\tcontent\n")
 	}
@@ -425,8 +437,20 @@ func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (ta
 		offset += bytes
 		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
 		offset += bytes
-		// TODO: not handling overflow!
-		record := page[offset : offset+int(payloadSize)]
+		var record []byte
+		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
+			chunkSize, remainingSize := db.calcOverflowSizes(pageHeader, payloadSize)
+			record = page[offset : offset+int(chunkSize)]
+			overflowFirstpage := readBigEndianUint32(page[offset+int(chunkSize):])
+			fmt.Fprintf(os.Stderr, "total payload size: %d\n", payloadSize)
+			fmt.Fprintf(os.Stderr, "min/max: %d - %d\n", pageHeader.MinOverflowPayloadSize, pageHeader.MaxOverflowPayloadSize)
+			fmt.Fprintf(os.Stderr, "chunk/remaining: %d - %d\n", chunkSize, remainingSize)
+			fmt.Fprintf(os.Stderr, "overflow first page: %d\n", overflowFirstpage)
+			fmt.Fprintf(os.Stderr, "this chunk data: %q\n", record)
+			log.Fatal("page overflow not implemented")
+		} else {
+			record = page[offset : offset+int(payloadSize)]
+		}
 		if debugMode {
 			fmt.Printf("%v\t%04x\t%v\t%v\t", cell, cellPointer, payloadSize, rowid)
 		}
@@ -435,6 +459,20 @@ func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (ta
 		tableData = append(tableData, TableRecord{Rowid: rowid, Columns: columnData})
 	}
 
+	return
+}
+
+func (db *DbContext) calcOverflowSizes(pageHeader PageHeader, payloadSize int64) (chunkSize int64, remainingSize int64) {
+	// These constants and calculations are described in detail on the spec
+	// https://www.sqlite.org/fileformat2.html#b_tree_pages
+	minSize := int64(pageHeader.MinOverflowPayloadSize)
+	maxSize := int64(pageHeader.MaxOverflowPayloadSize)
+	threshold := minSize + ((payloadSize - minSize) % (int64(db.Info.UsablePageSize) - 4))
+	if threshold <= maxSize {
+		chunkSize, remainingSize = threshold, payloadSize-threshold
+	} else {
+		chunkSize, remainingSize = minSize, payloadSize-minSize
+	}
 	return
 }
 
