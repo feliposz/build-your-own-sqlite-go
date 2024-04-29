@@ -901,8 +901,13 @@ outer:
 		}
 
 		// "without rowid" table?
-		if filterIndexPage == -1 && tableColumns[filterColumnNumber].Constraints[0] == "PRIMARY" {
-			filterIndexPage = rootPage
+		if filterIndexPage == -1 {
+			for _, constraint := range tableColumns[filterColumnNumber].Constraints {
+				if strings.EqualFold(constraint, "PRIMARY") {
+					filterIndexPage = rootPage
+					break
+				}
+			}
 		}
 	}
 
@@ -912,10 +917,14 @@ outer:
 	} else {
 		if filterColumnNumber == aliasedPKColumnNumber {
 			row := db.getRecordByRowid(rootPage, filterValue.(int64))
-			tableData = append(tableData, *row)
+			if row != nil {
+				tableData = append(tableData, *row)
+			}
 		} else if filterIndexPage == rootPage {
 			row := db.getRecordByPK(rootPage, filterColumnNumber, filterValue)
-			tableData = append(tableData, *row)
+			if row != nil {
+				tableData = append(tableData, *row)
+			}
 		} else {
 			// TODO: implement multiple-key indexes search
 			tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue, indexSortOrder)
@@ -1089,6 +1098,11 @@ func (db *DbContext) walkBtreeIndexPages(page int, filterValue any, indexSortOrd
 }
 
 func compareAny(a any, b any) int {
+	if a == nil && b == nil {
+		return 0
+	} else if a == nil || b == nil {
+		return -1
+	}
 	switch a.(type) {
 	case string:
 		switch b.(type) {
@@ -1250,6 +1264,14 @@ func (db *DbContext) getRecordByPK(page int, pkColumnNumber int, key any) *Table
 				hi = mid - 1
 			} else {
 				lo = mid + 1
+			}
+		}
+	} else if header.PageType == 0x0d {
+		// TODO: in my tests, rows were not sorted. Is this expected?
+		records := db.getLeafTableRecords(header, data)
+		for _, record := range records {
+			if compareAny(key, record.Columns[pkColumnNumber]) == 0 {
+				return &record
 			}
 		}
 	} else {
