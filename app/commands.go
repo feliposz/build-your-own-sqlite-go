@@ -13,11 +13,11 @@ func (db *DbContext) PrintDbInfo() {
 	encodingDescription := "?"
 	switch info.TextEncoding {
 	case 1:
-		encodingDescription = "utf8"
+		encodingDescription = " (utf8)"
 	case 2:
-		encodingDescription = "utf16le"
+		encodingDescription = " (utf16le)"
 	case 3:
-		encodingDescription = "utf16be"
+		encodingDescription = " (utf16be)"
 	}
 	fmt.Printf("database page size:  %d\n", info.DatabasePageSize)
 	fmt.Printf("write format:        %d\n", info.WriteFormat)
@@ -31,7 +31,7 @@ func (db *DbContext) PrintDbInfo() {
 	fmt.Printf("default cache size:  %d\n", info.DefaultCacheSize)
 	fmt.Printf("autovacuum top root: %d\n", info.AutovacuumTopRoot)
 	fmt.Printf("incremental vacuum:  %d\n", info.IncrementalVacuum)
-	fmt.Printf("text encoding:       %d (%v)\n", info.TextEncoding, encodingDescription)
+	fmt.Printf("text encoding:       %d%s\n", info.TextEncoding, encodingDescription)
 	fmt.Printf("user version:        %d\n", info.UserVersion)
 	fmt.Printf("application id:      %d\n", info.ApplicationID)
 	fmt.Printf("software version:    %d\n", info.SoftwareVersion)
@@ -264,9 +264,9 @@ outer:
 			var data any
 			if columnNumber < len(tableRow.Columns) {
 				data = tableRow.Columns[columnNumber]
-			} else {
-				// TODO: Implement default value (https://www.sqlite.org/lang_createtable.html#dfltval)
 			}
+			// TODO: Implement default value (https://www.sqlite.org/lang_createtable.html#dfltval)
+
 			// BLOB conversion for displaying
 			if bytes, ok := data.([]byte); ok {
 				data = string(bytes)
