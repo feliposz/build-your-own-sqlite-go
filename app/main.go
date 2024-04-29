@@ -994,7 +994,16 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 		records := db.getLeafTableRecords(header, data)
 		*tableDataPtr = append(*tableDataPtr, records...)
 	} else if header.PageType == 0x02 {
-		log.Fatal("table without rowid not implemented!")
+		entries := db.getInteriorIndexEntries(header, data)
+		for _, entry := range entries {
+			db.walkBtreeTablePages(int(entry.childPage), tableDataPtr)
+		}
+	} else if header.PageType == 0x0a {
+		entries := db.getLeafIndexEntries(header, data)
+		for _, entry := range entries {
+			columns := db.parseRecordFormat(entry)
+			*tableDataPtr = append(*tableDataPtr, TableRecord{Rowid: -1, Columns: columns})
+		}
 	} else {
 		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
 	}
