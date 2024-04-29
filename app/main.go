@@ -1025,6 +1025,11 @@ func (db *DbContext) walkBtreeTablePages(page int, tableDataPtr *[]TableRecord) 
 	} else if header.PageType == 0x02 {
 		entries := db.getInteriorIndexEntries(header, data)
 		for _, entry := range entries {
+			// skip right child page pointer that has no payload
+			if len(entry.keyPayload) > 0 {
+				columns := db.parseRecordFormat(entry.keyPayload)
+				*tableDataPtr = append(*tableDataPtr, TableRecord{Rowid: -1, Columns: columns})
+			}
 			db.walkBtreeTablePages(int(entry.childPage), tableDataPtr)
 		}
 	} else if header.PageType == 0x0a {
