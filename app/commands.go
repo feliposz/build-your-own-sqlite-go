@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"slices"
 	"strconv"
 	"strings"
 )
 
-func (db *DbContext) PrintDbInfo() {
+func (db *DbContext) PrintDbInfo(writer io.Writer) {
 	info := db.Info
 	encodingDescription := "?"
 	switch info.TextEncoding {
@@ -19,30 +20,30 @@ func (db *DbContext) PrintDbInfo() {
 	case 3:
 		encodingDescription = " (utf16be)"
 	}
-	fmt.Printf("database page size:  %d\n", info.DatabasePageSize)
-	fmt.Printf("write format:        %d\n", info.WriteFormat)
-	fmt.Printf("read format:         %d\n", info.ReadFormat)
-	fmt.Printf("reserved bytes:      %d\n", info.ReservedBytes)
-	fmt.Printf("file change counter: %d\n", info.FileChangeCounter)
-	fmt.Printf("database page count: %d\n", info.DatabasePageCount)
-	fmt.Printf("freelist page count: %d\n", info.FreelistPageCount)
-	fmt.Printf("schema cookie:       %d\n", info.SchemaCookie)
-	fmt.Printf("schema format:       %d\n", info.SchemaFormat)
-	fmt.Printf("default cache size:  %d\n", info.DefaultCacheSize)
-	fmt.Printf("autovacuum top root: %d\n", info.AutovacuumTopRoot)
-	fmt.Printf("incremental vacuum:  %d\n", info.IncrementalVacuum)
-	fmt.Printf("text encoding:       %d%s\n", info.TextEncoding, encodingDescription)
-	fmt.Printf("user version:        %d\n", info.UserVersion)
-	fmt.Printf("application id:      %d\n", info.ApplicationID)
-	fmt.Printf("software version:    %d\n", info.SoftwareVersion)
-	fmt.Printf("number of tables:    %d\n", info.NumberOfTables)
-	fmt.Printf("number of indexes:   %d\n", info.NumberOfIndexes)
-	fmt.Printf("number of triggers:  %d\n", info.NumberOfTriggers)
-	fmt.Printf("number of views:     %d\n", info.NumberOfViews)
-	fmt.Printf("schema size:         %d\n", info.SchemaSize)
+	fmt.Fprintf(writer, "database page size:  %d\n", info.DatabasePageSize)
+	fmt.Fprintf(writer, "write format:        %d\n", info.WriteFormat)
+	fmt.Fprintf(writer, "read format:         %d\n", info.ReadFormat)
+	fmt.Fprintf(writer, "reserved bytes:      %d\n", info.ReservedBytes)
+	fmt.Fprintf(writer, "file change counter: %d\n", info.FileChangeCounter)
+	fmt.Fprintf(writer, "database page count: %d\n", info.DatabasePageCount)
+	fmt.Fprintf(writer, "freelist page count: %d\n", info.FreelistPageCount)
+	fmt.Fprintf(writer, "schema cookie:       %d\n", info.SchemaCookie)
+	fmt.Fprintf(writer, "schema format:       %d\n", info.SchemaFormat)
+	fmt.Fprintf(writer, "default cache size:  %d\n", info.DefaultCacheSize)
+	fmt.Fprintf(writer, "autovacuum top root: %d\n", info.AutovacuumTopRoot)
+	fmt.Fprintf(writer, "incremental vacuum:  %d\n", info.IncrementalVacuum)
+	fmt.Fprintf(writer, "text encoding:       %d%s\n", info.TextEncoding, encodingDescription)
+	fmt.Fprintf(writer, "user version:        %d\n", info.UserVersion)
+	fmt.Fprintf(writer, "application id:      %d\n", info.ApplicationID)
+	fmt.Fprintf(writer, "software version:    %d\n", info.SoftwareVersion)
+	fmt.Fprintf(writer, "number of tables:    %d\n", info.NumberOfTables)
+	fmt.Fprintf(writer, "number of indexes:   %d\n", info.NumberOfIndexes)
+	fmt.Fprintf(writer, "number of triggers:  %d\n", info.NumberOfTriggers)
+	fmt.Fprintf(writer, "number of views:     %d\n", info.NumberOfViews)
+	fmt.Fprintf(writer, "schema size:         %d\n", info.SchemaSize)
 }
 
-func (db *DbContext) PrintTables() {
+func (db *DbContext) PrintTables(writer io.Writer) {
 	tables := []string{}
 	for _, entry := range db.Schema {
 		if (entry.Type == "table" || entry.Type == "view") && !strings.HasPrefix(entry.Name, "sqlite_") {
@@ -50,27 +51,27 @@ func (db *DbContext) PrintTables() {
 		}
 	}
 	slices.Sort(tables)
-	fmt.Println(strings.Join(tables, " "))
+	fmt.Fprintln(writer, strings.Join(tables, " "))
 }
 
-func (db *DbContext) PrintIndexes() {
+func (db *DbContext) PrintIndexes(writer io.Writer) {
 	for _, entry := range db.Schema {
 		if entry.Type == "index" {
-			fmt.Print(entry.Name, " ")
+			fmt.Fprint(writer, entry.Name, " ")
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(writer)
 }
 
-func (db *DbContext) PrintSchema() {
+func (db *DbContext) PrintSchema(writer io.Writer) {
 	for _, entry := range db.Schema {
 		if entry.SQL != "" {
-			fmt.Printf("%s;\n", entry.SQL)
+			fmt.Fprintf(writer, "%s;\n", entry.SQL)
 		}
 	}
 }
 
-func (db *DbContext) HandleSelect(query string) {
+func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 
 	// TODO: properly parse SQL syntax
 
@@ -145,7 +146,7 @@ func (db *DbContext) HandleSelect(query string) {
 	if countingOnly {
 		if filterColumnName == "" {
 			rowCount := db.fastCountRows(rootPage)
-			fmt.Println(rowCount)
+			fmt.Fprintln(writer, rowCount)
 			return
 		}
 	} else {
@@ -259,7 +260,7 @@ outer:
 		}
 		for i, columnNumber := range queryColumnNumbers {
 			if i > 0 {
-				fmt.Print("|")
+				fmt.Fprint(writer, "|")
 			}
 			var data any
 			if columnNumber < len(tableRow.Columns) {
@@ -271,12 +272,12 @@ outer:
 			if bytes, ok := data.([]byte); ok {
 				data = string(bytes)
 			}
-			fmt.Print(data)
+			fmt.Fprint(writer, data)
 		}
-		fmt.Println()
+		fmt.Fprintln(writer)
 	}
 
 	if countingOnly {
-		fmt.Println(rowCount)
+		fmt.Fprintln(writer, rowCount)
 	}
 }

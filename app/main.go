@@ -22,16 +22,16 @@ func main() {
 
 	switch command {
 	case ".dbinfo":
-		db.PrintDbInfo()
+		db.PrintDbInfo(os.Stdout)
 	case ".tables":
-		db.PrintTables()
+		db.PrintTables(os.Stdout)
 	case ".indexes":
-		db.PrintIndexes()
+		db.PrintIndexes(os.Stdout)
 	case ".schema":
-		db.PrintSchema()
+		db.PrintSchema(os.Stdout)
 	default:
 		if strings.Contains(strings.ToUpper(command), "SELECT") {
-			db.HandleSelect(command)
+			db.HandleSelect(command, os.Stdout)
 		} else {
 			fmt.Println("Unknown command", command)
 			os.Exit(1)
