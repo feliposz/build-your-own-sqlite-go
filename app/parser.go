@@ -8,23 +8,19 @@ import (
 	"unicode"
 )
 
-func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
-	if sql == "" {
-		return
-	}
-	if !strings.HasPrefix(sql, "CREATE") {
-		log.Fatal("invalid DDL statement")
-	}
-	leftParen := strings.Index(sql, "(")
-	rightParen := strings.LastIndex(sql, ")")
-	if leftParen < 0 || rightParen < 0 {
-		return
-	}
-	// remove everything before first "(" and after last ")"
-	sql = sql[leftParen+1 : rightParen]
+type Tokenizer struct {
+	Current int
+	Tokens  []string
+}
 
-	// tokenize column definitions for processing
-	r := strings.NewReader(sql)
+func NewTokenizer(source string) (tokenizer *Tokenizer) {
+	tokenizer = &Tokenizer{}
+	tokenizer.tokenize(source)
+	return
+}
+
+func (t *Tokenizer) tokenize(source string) {
+	r := strings.NewReader(source)
 	tokens := []string{}
 	for {
 		ch, _, err := r.ReadRune()
@@ -113,6 +109,27 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 			tokens = append(tokens, string(runes))
 		}
 	}
+	t.Tokens = tokens
+}
+
+func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
+	if sql == "" {
+		return
+	}
+	if !strings.HasPrefix(sql, "CREATE") {
+		log.Fatal("invalid DDL statement")
+	}
+	leftParen := strings.Index(sql, "(")
+	rightParen := strings.LastIndex(sql, ")")
+	if leftParen < 0 || rightParen < 0 {
+		return
+	}
+	// remove everything before first "(" and after last ")"
+	sql = sql[leftParen+1 : rightParen]
+
+	// tokenize column definitions for processing
+	tokenizer := NewTokenizer(sql)
+	tokens := tokenizer.Tokens
 
 	if debugMode {
 		fmt.Printf("%#v\n", tokens)
