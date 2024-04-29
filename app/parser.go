@@ -34,7 +34,9 @@ func (t *Tokenizer) tokenize(source string) {
 			continue
 		}
 
-		if ch == '"' {
+		switch ch {
+
+		case '"':
 			// quotes are not part of the token
 			runes := []rune{}
 			for {
@@ -51,7 +53,8 @@ func (t *Tokenizer) tokenize(source string) {
 				runes = append(runes, ch)
 			}
 			tokens = append(tokens, string(runes))
-		} else if ch == '[' {
+
+		case '[':
 			// brackets are not part of the token
 			runes := []rune{}
 			for {
@@ -68,9 +71,10 @@ func (t *Tokenizer) tokenize(source string) {
 				runes = append(runes, ch)
 			}
 			tokens = append(tokens, string(runes))
-		} else if ch == '(' {
-			// parenthesis ARE part of the token
-			runes := []rune{'('}
+
+		case '\'':
+			// single-quote ARE part of the token
+			runes := []rune{'\''}
 			for {
 				ch, _, err := r.ReadRune()
 				if err != nil {
@@ -80,15 +84,18 @@ func (t *Tokenizer) tokenize(source string) {
 					panic(err)
 				}
 				runes = append(runes, ch)
-				if ch == ')' {
+				if ch == '\'' {
 					break
 				}
 			}
 			tokens = append(tokens, string(runes))
-		} else if ch == ',' {
-			tokens = append(tokens, ",")
-		} else {
+
+		case '(', ')', ',', '*':
+			tokens = append(tokens, string(ch))
+
+		case '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			runes := []rune{ch}
+		number_loop:
 			for {
 				ch, _, err := r.ReadRune()
 				if err != nil {
@@ -97,9 +104,31 @@ func (t *Tokenizer) tokenize(source string) {
 					}
 					panic(err)
 				}
-				if ch == ',' {
+				switch ch {
+				case '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', 'e', 'E':
+					runes = append(runes, ch)
+				default:
 					r.UnreadRune()
-					break
+					break number_loop
+				}
+			}
+			tokens = append(tokens, string(runes))
+
+		default:
+			runes := []rune{ch}
+		default_loop:
+			for {
+				ch, _, err := r.ReadRune()
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					panic(err)
+				}
+				switch ch {
+				case '(', ')', ',', '*':
+					r.UnreadRune()
+					break default_loop
 				}
 				if unicode.IsSpace(ch) {
 					break
@@ -131,8 +160,10 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 	tokenizer := NewTokenizer(sql)
 	tokens := tokenizer.Tokens
 
+	debugMode := true
 	if debugMode {
-		fmt.Printf("%#v\n", tokens)
+		fmt.Printf("tokens: %#v\n", tokens)
+		fmt.Println()
 	}
 
 	for i := 0; i < len(tokens); i++ {
@@ -166,7 +197,7 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 			}
 			column.Type = strings.Join(typeTokens, " ")
 			if debugMode {
-				fmt.Printf("%#v\n", column)
+				fmt.Printf("column: %#v\n", column)
 			}
 			columns = append(columns, column)
 		}
@@ -186,5 +217,10 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 		}
 	}
 
+	if debugMode {
+		fmt.Println()
+		fmt.Printf("constraints: %#v\n", constraints)
+		fmt.Println("-----")
+	}
 	return
 }
