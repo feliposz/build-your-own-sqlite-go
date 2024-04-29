@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -548,9 +549,9 @@ func (db *DbContext) getLeafTableRecords(pageHeader PageHeader, page []byte) (ta
 	}
 	for cell, cellPointer := range getCellOffsets(pageHeader, page) {
 		offset := cellPointer
-		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
+		payloadSize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
-		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
+		rowid, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
 		var record []byte
 		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
@@ -689,7 +690,9 @@ func (db *DbContext) parseRecordFormat(record []byte) []any {
 			integer := readBigEndianInt(record[index : index+typeLength[1]])
 			columnData = append(columnData, integer)
 		case 2:
-			log.Fatal("float not implemented!")
+			bits := readBigEndianInt(record[index : index+typeLength[1]])
+			float := math.Float64frombits(uint64(bits))
+			columnData = append(columnData, float)
 		case 8:
 			columnData = append(columnData, int64(0))
 		case 9:
@@ -779,7 +782,12 @@ func (db *DbContext) HandleSelect(query string) {
 			var err error
 			filterValue, err = strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				panic(err)
+				if _, isNumError := err.(*strconv.NumError); isNumError {
+					filterValue, err = strconv.ParseFloat(value, 64)
+				}
+				if err != nil {
+					panic(err)
+				}
 			}
 		}
 
@@ -1072,6 +1080,15 @@ func compareAny(a any, b any) int {
 		switch b.(type) {
 		case int64:
 			return cmp.Compare(a.(int64), b.(int64))
+		case float64:
+			return cmp.Compare(float64(a.(int64)), b.(float64))
+		}
+	case float64:
+		switch b.(type) {
+		case float64:
+			return cmp.Compare(a.(float64), b.(float64))
+		case int64:
+			return cmp.Compare(a.(float64), float64(b.(int64)))
 		}
 	case []byte:
 		switch b.(type) {
@@ -1183,9 +1200,9 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 
 func (db *DbContext) getLeafTableRawRecords(pageHeader PageHeader, page []byte) (records []TableRawRecord) {
 	for _, offset := range getCellOffsets(pageHeader, page) {
-		payloadSize, bytes := readBigEndianVarint(page[offset : offset+9])
+		payloadSize, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
-		rowid, bytes := readBigEndianVarint(page[offset : offset+9])
+		rowid, bytes := readBigEndianVarint(page[offset:])
 		offset += bytes
 		var record []byte
 		if payloadSize > int64(pageHeader.MaxOverflowPayloadSize) {
