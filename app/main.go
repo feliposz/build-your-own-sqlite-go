@@ -442,6 +442,20 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 		}
 	}
 
+	// if primary key is defined on table level, add it to the proper column
+	// TODO: handle multi-column PKs
+	for i := 0; i < len(constraints); i++ {
+		if strings.ToUpper(constraints[i]) == "PRIMARY" && strings.ToUpper(constraints[i+1]) == "KEY" {
+			columnName := strings.Trim(constraints[i+2], "()")
+			for j := range columns {
+				if columns[j].Name == columnName {
+					columns[j].Constraints = append(columns[j].Constraints, "PRIMARY", "KEY")
+				}
+			}
+			i += 2
+		}
+	}
+
 	return
 }
 
