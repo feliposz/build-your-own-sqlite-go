@@ -790,7 +790,6 @@ func (db *DbContext) HandleSelect(query string) {
 				}
 			}
 		}
-
 	}
 
 	queryTableName := strings.TrimSpace(query[fromPos+4 : wherePos])
@@ -852,7 +851,6 @@ func (db *DbContext) HandleSelect(query string) {
 					}
 				}
 				if !found {
-
 					log.Fatal("no such column: ", queryColumnName)
 				}
 			}
@@ -901,6 +899,11 @@ outer:
 				break
 			}
 		}
+
+		// "without rowid" table?
+		if filterIndexPage == -1 && tableColumns[filterColumnNumber].Constraints[0] == "PRIMARY" {
+			filterIndexPage = rootPage
+		}
 	}
 
 	var tableData []TableRecord
@@ -909,6 +912,9 @@ outer:
 	} else {
 		if filterColumnNumber == aliasedPKColumnNumber {
 			row := db.getRecordByRowid(rootPage, filterValue.(int64))
+			tableData = append(tableData, *row)
+		} else if filterIndexPage == rootPage {
+			row := db.getRecordByPK(rootPage, filterColumnNumber, filterValue)
 			tableData = append(tableData, *row)
 		} else {
 			// TODO: implement multiple-key indexes search
@@ -1205,8 +1211,47 @@ func (db *DbContext) getRecordByRowid(page int, rowid int64) *TableRecord {
 				lo = mid + 1
 			}
 		}
-	} else if header.PageType == 0x02 {
-		log.Fatal("table without rowid not implemented!")
+	} else {
+		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
+	}
+	return nil
+}
+
+func (db *DbContext) getRecordByPK(page int, pkColumnNumber int, key any) *TableRecord {
+	header, data := db.getPage(page)
+	if header.PageType == 0x02 {
+		entries := db.getInteriorIndexEntries(header, data)
+		lo, hi := 0, len(entries)-1
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			columns := db.parseRecordFormat(entries[mid].keyPayload)
+			if mid == len(entries)-1 {
+				// right-most child
+				lo = mid
+				break
+			} else if compareAny(key, columns[pkColumnNumber]) == 0 {
+				return &TableRecord{Rowid: -1, Columns: columns}
+			} else if compareAny(key, columns[pkColumnNumber]) < 0 {
+				hi = mid - 1
+			} else {
+				lo = mid + 1
+			}
+		}
+		return db.getRecordByPK(int(entries[lo].childPage), pkColumnNumber, key)
+	} else if header.PageType == 0x0a {
+		entries := db.getLeafIndexEntries(header, data)
+		lo, hi := 0, len(entries)-1
+		for lo <= hi {
+			mid := (lo + hi) / 2
+			columns := db.parseRecordFormat(entries[mid])
+			if compareAny(key, columns[pkColumnNumber]) == 0 {
+				return &TableRecord{Rowid: -1, Columns: columns}
+			} else if compareAny(key, columns[pkColumnNumber]) < 0 {
+				hi = mid - 1
+			} else {
+				lo = mid + 1
+			}
+		}
 	} else {
 		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
 	}
