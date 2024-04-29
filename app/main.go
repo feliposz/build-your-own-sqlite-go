@@ -961,10 +961,16 @@ func (db *DbContext) fastCountRows(page int) int {
 			totalCount += db.fastCountRows(int(entry.childPage))
 		}
 		return totalCount
-	} else if header.PageType == 0x0d {
-		return int(header.CellCount)
 	} else if header.PageType == 0x02 {
-		log.Fatal("table without rowid not implemented!")
+		totalCount := 0
+		entries := db.getInteriorIndexEntries(header, data)
+		totalCount += int(header.CellCount)
+		for _, entry := range entries {
+			totalCount += db.fastCountRows(int(entry.childPage))
+		}
+		return totalCount
+	} else if header.PageType == 0x0d || header.PageType == 0x0a {
+		return int(header.CellCount)
 	} else {
 		log.Fatal("unexpected page type when walking table btree: ", header.PageType)
 	}
