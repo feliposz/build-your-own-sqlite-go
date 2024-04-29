@@ -851,10 +851,26 @@ func (db *DbContext) HandleSelect(query string) {
 		}
 	}
 
+	// integer primary keys are stored as null and aliased with the rowid
+	aliasedPKColumnNumber := -1
+outer:
+	for columnNumber, columnDef := range tableColumns {
+		if strings.EqualFold(columnDef.Type, "integer") && len(columnDef.Constraints) > 0 {
+			for _, constraint := range columnDef.Constraints {
+				if strings.EqualFold(constraint, "primary") {
+					aliasedPKColumnNumber = columnNumber
+					break outer
+				}
+			}
+		}
+	}
+
 	filterColumnNumber := -1
 	filterIndexPage := -1
 	indexSortOrder := 1
-	if filterColumnName != "" {
+	if filterColumnName == "rowid" {
+		filterColumnNumber = aliasedPKColumnNumber
+	} else if filterColumnName != "" {
 		found := false
 		for number, column := range tableColumns {
 			if strings.EqualFold(filterColumnName, column.Name) {
@@ -883,26 +899,20 @@ func (db *DbContext) HandleSelect(query string) {
 	if filterIndexPage == -1 {
 		tableData = db.fullTableScan(rootPage)
 	} else {
-		// TODO: implement multiple-key indexes search
-		tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue, indexSortOrder)
-	}
-
-	// integer primary keys are stored as null and aliased with the rowid
-	aliasedPKColumnNumber := -1
-outer:
-	for columnNumber, columnDef := range tableColumns {
-		if strings.EqualFold(columnDef.Type, "integer") && len(columnDef.Constraints) > 0 {
-			for _, constraint := range columnDef.Constraints {
-				if strings.EqualFold(constraint, "primary") {
-					aliasedPKColumnNumber = columnNumber
-					break outer
-				}
-			}
+		if filterColumnNumber == aliasedPKColumnNumber {
+			row := db.getRecordByRowid(rootPage, filterValue.(int64))
+			tableData = append(tableData, *row)
+		} else {
+			// TODO: implement multiple-key indexes search
+			tableData = db.indexedTableScan(rootPage, filterIndexPage, filterValue, indexSortOrder)
 		}
 	}
 
 	rowCount := 0
 	for _, tableRow := range tableData {
+		if aliasedPKColumnNumber >= 0 {
+			tableRow.Columns[aliasedPKColumnNumber] = tableRow.Rowid
+		}
 		if filterColumnNumber >= 0 && compareAny(tableRow.Columns[filterColumnNumber], filterValue) != 0 {
 			continue
 		}
@@ -919,9 +929,6 @@ outer:
 				data = tableRow.Columns[columnNumber]
 			} else {
 				// TODO: Implement default value (https://www.sqlite.org/lang_createtable.html#dfltval)
-			}
-			if data == nil && columnNumber == aliasedPKColumnNumber {
-				data = tableRow.Rowid
 			}
 			// BLOB conversion for displaying
 			if bytes, ok := data.([]byte); ok {
