@@ -187,7 +187,7 @@ func (db *DbContext) readSchema() {
 			db.Info.NumberOfViews++
 		case "index":
 			db.Info.NumberOfIndexes++
-			entry.Columns, _ = parseColumns(entry.SQL)
+			_, _, entry.Columns = parseCreateIndex(entry.SQL)
 		}
 		schema = append(schema, entry)
 		schemaSize += len(entry.SQL)

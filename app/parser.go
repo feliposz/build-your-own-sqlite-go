@@ -10,11 +10,13 @@ import (
 
 type Tokenizer struct {
 	Current int
+	Source  string
 	Tokens  []string
 }
 
 func NewTokenizer(source string) (tokenizer *Tokenizer) {
 	tokenizer = &Tokenizer{}
+	tokenizer.Source = source
 	tokenizer.tokenize(source)
 	return
 }
@@ -126,7 +128,7 @@ func (t *Tokenizer) tokenize(source string) {
 					panic(err)
 				}
 				switch ch {
-				case '(', ')', ',', '*':
+				case '(', ')', ',', '*', '[', '"':
 					r.UnreadRune()
 					break default_loop
 				}
@@ -139,6 +141,47 @@ func (t *Tokenizer) tokenize(source string) {
 		}
 	}
 	t.Tokens = tokens
+}
+
+func (t *Tokenizer) AtEnd() bool {
+	return t.Current >= len(t.Tokens)
+}
+
+func (t *Tokenizer) Match(s string) bool {
+	if !t.AtEnd() && strings.EqualFold(t.Tokens[t.Current], s) {
+		t.Current++
+		return true
+	}
+	return false
+}
+
+func (t *Tokenizer) MustMatch(s string) {
+	if !t.Match(s) {
+		log.Printf("source: %q\n", t.Source)
+		log.Fatal("syntax error - expected: ", s)
+	}
+}
+
+func (t *Tokenizer) Peek() string {
+	if !t.AtEnd() {
+		return t.Tokens[t.Current]
+	}
+	return ""
+}
+
+func (t *Tokenizer) Advance() {
+	if !t.AtEnd() {
+		t.Current++
+	}
+}
+
+func (t *Tokenizer) MustGetIdentifier() string {
+	if t.AtEnd() {
+		log.Fatal("syntax error - expected identifier")
+	}
+	result := t.Peek()
+	t.Advance()
+	return result
 }
 
 func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
@@ -160,7 +203,6 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 	tokenizer := NewTokenizer(sql)
 	tokens := tokenizer.Tokens
 
-	debugMode := true
 	if debugMode {
 		fmt.Printf("tokens: %#v\n", tokens)
 		fmt.Println()
@@ -221,6 +263,44 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 		fmt.Println()
 		fmt.Printf("constraints: %#v\n", constraints)
 		fmt.Println("-----")
+	}
+	return
+}
+
+func parseCreateIndex(sql string) (indexName, tableName string, columns []ColumnDef) {
+	t := NewTokenizer(sql)
+	if t.AtEnd() {
+		return
+	}
+	t.MustMatch("CREATE")
+	t.Match("UNIQUE")
+	t.MustMatch("INDEX")
+	if t.Match("IF") {
+		t.MustMatch("NOT")
+		t.MustMatch("EXISTS")
+	}
+	indexName = t.MustGetIdentifier()
+	t.MustMatch("ON")
+	tableName = t.MustGetIdentifier()
+	t.MustMatch("(")
+	for {
+		column := ColumnDef{}
+		column.Name = t.MustGetIdentifier()
+		if t.Match("COLLATE") {
+			collationName := t.MustGetIdentifier()
+			column.Constraints = append(column.Constraints, "COLLATE", collationName)
+		}
+		if t.Match("DESC") {
+			column.Type = "DESC"
+		} else {
+			column.Type = "ASC"
+			t.Match("ASC")
+		}
+		columns = append(columns, column)
+		if !t.Match(",") {
+			t.MustMatch(")")
+			break
+		}
 	}
 	return
 }
