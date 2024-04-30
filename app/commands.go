@@ -80,7 +80,7 @@ func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 	if strings.EqualFold(queryTableName, "sqlite_schema") || strings.EqualFold(queryTableName, "sqlite_master") {
 		rootPage = 1
 		// sqlite_schema has no table definition - this is the one from the docs: https://www.sqlite.org/fileformat.html#storage_of_the_sql_database_schema
-		tableColumns, _ = parseColumns("CREATE TABLE sqlite_schema(type text, name text, tbl_name text, rootpage integer, sql text);")
+		_, tableColumns, _ = parseCreateTable("CREATE TABLE sqlite_schema(type text, name text, tbl_name text, rootpage integer, sql text);")
 	}
 
 	for _, entry := range db.Schema {
@@ -137,9 +137,9 @@ func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 	aliasedPKColumnNumber := -1
 outer:
 	for columnNumber, columnDef := range tableColumns {
-		if strings.EqualFold(columnDef.Type, "integer") && len(columnDef.Constraints) > 0 {
+		if strings.EqualFold(columnDef.Type, "INTEGER") && len(columnDef.Constraints) > 0 {
 			for _, constraint := range columnDef.Constraints {
-				if strings.EqualFold(constraint, "primary") {
+				if strings.Contains(strings.ToUpper(constraint), "PRIMARY KEY") {
 					aliasedPKColumnNumber = columnNumber
 					break outer
 				}

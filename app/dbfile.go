@@ -180,7 +180,7 @@ func (db *DbContext) readSchema() {
 		switch entry.Type {
 		case "table":
 			db.Info.NumberOfTables++
-			entry.Columns, entry.Constraints = parseColumns(entry.SQL)
+			_, entry.Columns, entry.Constraints = parseCreateTable(entry.SQL)
 		case "trigger":
 			db.Info.NumberOfTriggers++
 		case "view":

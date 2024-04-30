@@ -7,57 +7,69 @@ import (
 	"strings"
 )
 
-func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
-	if sql == "" {
+func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constraints []string) {
+	t := NewTokenizer(sql)
+	if t.AtEnd() {
 		return
 	}
-	if !strings.HasPrefix(sql, "CREATE") {
-		log.Fatal("invalid DDL statement")
-	}
-	leftParen := strings.Index(sql, "(")
-	rightParen := strings.LastIndex(sql, ")")
-	if leftParen < 0 || rightParen < 0 {
-		return
-	}
-	// remove everything before first "(" and after last ")"
-	sql = sql[leftParen+1 : rightParen]
-
-	// tokenize column definitions for processing
-	tokenizer := NewTokenizer(sql)
-	tokens := tokenizer.Tokens
-
 	if debugMode {
-		fmt.Printf("tokens: %#v\n", tokens)
+		fmt.Printf("tokens: %#v\n", t.Tokens)
 		fmt.Println()
 	}
-
-	for i := 0; i < len(tokens); i++ {
-		switch strings.ToUpper(tokens[i]) {
-		case "PRIMARY", "CONSTRAINT", "UNIQUE", "CHECK", "FOREIGN":
-			// table constraints start with one of these keywords and everything is part of the definition until the next ","
-			for i < len(tokens) && tokens[i] != "," {
-				constraints = append(constraints, tokens[i])
-				i++
+	t.MustMatch("CREATE")
+	if t.Match("TEMP") || t.Match("TEMPORARY") {
+		constraints = append(constraints, t.Previous())
+	}
+	t.MustMatch("TABLE")
+	if t.Match("IF") {
+		t.MustMatch("NOT")
+		t.MustMatch("EXISTS")
+	}
+	tableName = t.MustGetIdentifier()
+	t.MustMatch("(")
+	for {
+		constraint := []string{}
+		if t.Match("CONSTRAINT") {
+			constraintName := t.MustGetIdentifier()
+			constraint = append(constraint, "CONSTRAINT", constraintName)
+		}
+		if t.Match("PRIMARY") || t.Match("UNIQUE") || t.Match("CHECK") || t.Match("FOREIGN") {
+			// TODO: parse syntax for each constraint type
+			constraint = append(constraint, t.Previous())
+			for !t.AtEnd() {
+				token := t.Peek()
+				if token == "," || token == ")" {
+					break
+				}
+				constraint = append(constraints, token)
+				t.Advance()
 			}
-		default:
-			// column definitions always start with column name
+			constraints = append(constraints, strings.Join(constraint, " "))
+		} else if len(constraint) > 0 {
+			log.Fatal("invalid constraint")
+		} else {
 			column := ColumnDef{}
-			column.Name = tokens[i]
-			i++
-			// type and constraints are optional
+			column.Name = t.MustGetIdentifier()
 			typeTokens := []string{}
-			for i < len(tokens) && tokens[i] != "," {
-				switch strings.ToUpper(tokens[i]) {
-				case "PRIMARY", "CONSTRAINT", "UNIQUE", "CHECK", "REFERENCES", "NOT", "NULL", "DEFAULT", "COLLATE", "GENERATED":
-					// column constraints start with one of these keywords and everything else until the "," is constraints
-					for i < len(tokens) && tokens[i] != "," {
-						column.Constraints = append(column.Constraints, tokens[i])
-						i++
+			for !t.AtEnd() {
+				token := t.Peek()
+				if token == "," || token == ")" {
+					break
+				}
+				if t.Match("PRIMARY") || t.Match("CONSTRAINT") || t.Match("UNIQUE") || t.Match("CHECK") || t.Match("REFERENCES") || t.Match("NOT") || t.Match("NULL") || t.Match("DEFAULT") || t.Match("COLLATE") || t.Match("GENERATED") {
+					constraint = append(constraints, t.Previous())
+					// TODO: parse syntax for each constraint type
+					for !t.AtEnd() {
+						token := t.Peek()
+						if token == "," || token == ")" {
+							break
+						}
+						constraint = append(constraint, token)
+						t.Advance()
 					}
-				default:
-					// everything after the column name and before the constraints are part of the "type name"
-					typeTokens = append(typeTokens, tokens[i])
-					i++
+					column.Constraints = append(column.Constraints, strings.Join(constraint, " "))
+				} else {
+					typeTokens = append(typeTokens, t.MustGetIdentifier())
 				}
 			}
 			column.Type = strings.Join(typeTokens, " ")
@@ -65,6 +77,10 @@ func parseColumns(sql string) (columns []ColumnDef, constraints []string) {
 				fmt.Printf("column: %#v\n", column)
 			}
 			columns = append(columns, column)
+		}
+		if !t.Match(",") {
+			t.MustMatch(")")
+			break
 		}
 	}
 

@@ -161,6 +161,13 @@ func (t *Tokenizer) MustMatch(s string) {
 	}
 }
 
+func (t *Tokenizer) Previous() string {
+	if t.Current > 0 {
+		return t.Tokens[t.Current-1]
+	}
+	return ""
+}
+
 func (t *Tokenizer) Peek() string {
 	if !t.AtEnd() {
 		return t.Tokens[t.Current]
