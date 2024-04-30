@@ -40,7 +40,9 @@ func readBigEndianInt(data []byte) (value int64) {
 func compareAny(a any, b any) int {
 	if a == nil && b == nil {
 		return 0
-	} else if a == nil || b == nil {
+	} else if a == nil {
+		return 1
+	} else if b == nil {
 		return -1
 	}
 	switch a.(type) {
