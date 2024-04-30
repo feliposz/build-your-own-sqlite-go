@@ -8,7 +8,7 @@ import (
 )
 
 func TestPrintPageSize(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 	result := new(bytes.Buffer)
 	db.PrintDbInfo(result)
@@ -19,7 +19,7 @@ func TestPrintPageSize(t *testing.T) {
 }
 
 func TestPrintNumberOfTables(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 	result := new(bytes.Buffer)
 	db.PrintDbInfo(result)
@@ -30,7 +30,7 @@ func TestPrintNumberOfTables(t *testing.T) {
 }
 
 func TestPrintTableNames(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 	result := new(bytes.Buffer)
 	db.PrintTables(result)
@@ -43,7 +43,7 @@ func TestPrintTableNames(t *testing.T) {
 }
 
 func TestPrintIndexesNames(t *testing.T) {
-	db := NewDbContext("../test-dbs/companies.db")
+	db := NewDbContext("../companies.db")
 	defer db.Close()
 	result := new(bytes.Buffer)
 	db.PrintIndexes(result)
@@ -56,7 +56,7 @@ func TestPrintIndexesNames(t *testing.T) {
 }
 
 func TestPrintSchema(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 	result := new(bytes.Buffer)
 	db.PrintSchema(result)
@@ -69,7 +69,7 @@ func TestPrintSchema(t *testing.T) {
 }
 
 func TestCountRows(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 
 	tests := []struct{ query, expected string }{
@@ -87,7 +87,7 @@ func TestCountRows(t *testing.T) {
 }
 
 func TestSelectSingleColumn(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 
 	tests := []struct{ query, expected string }{
@@ -106,7 +106,7 @@ func TestSelectSingleColumn(t *testing.T) {
 }
 
 func TestSelectMultipleColumns(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 
 	tests := []struct{ query, expected string }{
@@ -125,7 +125,7 @@ func TestSelectMultipleColumns(t *testing.T) {
 }
 
 func TestFilterDataWithAWhereClause(t *testing.T) {
-	db := NewDbContext("../test-dbs/sample.db")
+	db := NewDbContext("../sample.db")
 	defer db.Close()
 
 	tests := []struct{ query, mustContain, mustNotContain string }{
@@ -146,7 +146,7 @@ func TestFilterDataWithAWhereClause(t *testing.T) {
 }
 
 func TestRetrieveDataUsingAnIndex(t *testing.T) {
-	db := NewDbContext("../test-dbs/companies.db")
+	db := NewDbContext("../companies.db")
 	defer db.Close()
 
 	tests := []struct{ query, mustContain, mustNotContain string }{
