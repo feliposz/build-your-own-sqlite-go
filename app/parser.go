@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -300,6 +301,47 @@ func parseCreateIndex(sql string) (indexName, tableName string, columns []Column
 		if !t.Match(",") {
 			t.MustMatch(")")
 			break
+		}
+	}
+	return
+}
+
+func parseSelectStatement(sql string) (tableName string, columns []string, filterColumnName string, filterValue any) {
+	t := NewTokenizer(sql)
+	t.MustMatch("SELECT")
+	for {
+		if t.Match("COUNT") {
+			t.MustMatch("(")
+			t.MustMatch("*")
+			t.MustMatch(")")
+			columns = append(columns, "COUNT(*)")
+		} else {
+			column := t.MustGetIdentifier()
+			columns = append(columns, column)
+		}
+		if !t.Match(",") {
+			break
+		}
+	}
+	t.MustMatch("FROM")
+	tableName = t.MustGetIdentifier()
+	if t.Match("WHERE") {
+		filterColumnName = t.MustGetIdentifier()
+		t.MustMatch("=")
+		value := t.MustGetIdentifier()
+		if value[0] == '\'' {
+			filterValue = strings.Trim(value, "'")
+		} else {
+			var err error
+			filterValue, err = strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				if _, isNumError := err.(*strconv.NumError); isNumError {
+					filterValue, err = strconv.ParseFloat(value, 64)
+				}
+				if err != nil {
+					log.Fatalf("error converting value %q: %v", value, err)
+				}
+			}
 		}
 	}
 	return

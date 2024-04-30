@@ -5,7 +5,6 @@ import (
 	"io"
 	"log"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -73,46 +72,7 @@ func (db *DbContext) PrintSchema(writer io.Writer) {
 
 func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 
-	// TODO: properly parse SQL syntax
-
-	queryUpper := strings.ToUpper(query)
-	selectPos := strings.Index(queryUpper, "SELECT")
-	fromPos := strings.Index(queryUpper, "FROM")
-	wherePos := strings.Index(queryUpper, "WHERE")
-
-	if selectPos < 0 || fromPos < 0 || fromPos < selectPos {
-		log.Fatal("syntax error")
-	}
-
-	var filterColumnName string
-	var filterValue any
-	if wherePos == -1 {
-		wherePos = len(query)
-	} else {
-		whereParts := strings.SplitN(query[wherePos+5:], "=", 2)
-		filterColumnName = strings.TrimSpace(whereParts[0])
-		value := strings.TrimSpace(whereParts[1])
-		if value[0] == '\'' {
-			filterValue = strings.Trim(value, "'")
-		} else {
-			var err error
-			filterValue, err = strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				if _, isNumError := err.(*strconv.NumError); isNumError {
-					filterValue, err = strconv.ParseFloat(value, 64)
-				}
-				if err != nil {
-					panic(err)
-				}
-			}
-		}
-	}
-
-	queryTableName := strings.TrimSpace(query[fromPos+4 : wherePos])
-	queryColumnNames := strings.Split(query[selectPos+6:fromPos], ",")
-	for i := range queryColumnNames {
-		queryColumnNames[i] = strings.TrimSpace(queryColumnNames[i])
-	}
+	queryTableName, queryColumnNames, filterColumnName, filterValue := parseSelectStatement(query)
 
 	rootPage := 0
 	var tableColumns []ColumnDef

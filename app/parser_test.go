@@ -44,3 +44,21 @@ func TestParseCreateIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSelectStatement(t *testing.T) {
+	tableName, columnNames, filterColumn, filterValue := parseSelectStatement("select a, b, c, *, count(*) from tab where x = '123'")
+	if tableName != "tab" {
+		t.Errorf("expected table name: %q - got: %q\n", "tab", tableName)
+	}
+	for i, name := range []string{"a", "b", "c", "*", "COUNT(*)"} {
+		if columnNames[i] != name {
+			t.Errorf("expected column name: %q - got: %q\n", name, columnNames[i])
+		}
+	}
+	if filterColumn != "x" {
+		t.Errorf("expected filter column name: %q - got: %q\n", "x", filterColumn)
+	}
+	if compareAny("123", filterValue) != 0 {
+		t.Errorf("expected filter value: %q - got: %q\n", "123", filterValue)
+	}
+}
