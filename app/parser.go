@@ -19,6 +19,11 @@ func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constr
 	if err != nil {
 		return
 	}
+	if t.Match("VIRTUAL") {
+		constraints = append(constraints, t.Previous())
+		// Not supported, just return
+		return
+	}
 	if t.Match("TEMP") || t.Match("TEMPORARY") {
 		constraints = append(constraints, t.Previous())
 	}
