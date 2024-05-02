@@ -35,6 +35,35 @@ func (t *Tokenizer) tokenize(source string) {
 			continue
 		}
 
+		// Detecting line comments
+		if ch == '-' {
+			ch2, _, err := r.ReadRune()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				panic(err)
+			}
+			if ch2 == '-' {
+				// ignore everything until linefeed
+				for {
+					ch2, _, err := r.ReadRune()
+					if err != nil {
+						if err == io.EOF {
+							break
+						}
+						panic(err)
+					}
+					if ch2 == '\n' {
+						break
+					}
+				}
+				continue
+			} else {
+				r.UnreadRune()
+			}
+		}
+
 		switch ch {
 
 		case '"':
