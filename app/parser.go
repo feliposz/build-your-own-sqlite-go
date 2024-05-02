@@ -2,12 +2,11 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 )
 
-func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constraints []string) {
+func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constraints []string, err error) {
 	t := NewTokenizer(sql)
 	if t.AtEnd() {
 		return
@@ -16,21 +15,43 @@ func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constr
 		fmt.Printf("tokens: %#v\n", t.Tokens)
 		fmt.Println()
 	}
-	t.MustMatch("CREATE")
+	err = t.MustMatch("CREATE")
+	if err != nil {
+		return
+	}
 	if t.Match("TEMP") || t.Match("TEMPORARY") {
 		constraints = append(constraints, t.Previous())
 	}
-	t.MustMatch("TABLE")
-	if t.Match("IF") {
-		t.MustMatch("NOT")
-		t.MustMatch("EXISTS")
+	err = t.MustMatch("TABLE")
+	if err != nil {
+		return
 	}
-	tableName = t.MustGetIdentifier()
-	t.MustMatch("(")
+	if t.Match("IF") {
+		err = t.MustMatch("NOT")
+		if err != nil {
+			return
+		}
+		err = t.MustMatch("EXISTS")
+		if err != nil {
+			return
+		}
+	}
+	tableName, err = t.MustGetIdentifier()
+	if err != nil {
+		return
+	}
+	err = t.MustMatch("(")
+	if err != nil {
+		return
+	}
 	for {
 		constraint := []string{}
 		if t.Match("CONSTRAINT") {
-			constraintName := t.MustGetIdentifier()
+			var constraintName string
+			constraintName, err = t.MustGetIdentifier()
+			if err != nil {
+				return
+			}
 			constraint = append(constraint, "CONSTRAINT", constraintName)
 		}
 		if t.Match("PRIMARY") || t.Match("UNIQUE") || t.Match("CHECK") || t.Match("FOREIGN") {
@@ -46,10 +67,14 @@ func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constr
 			}
 			constraints = append(constraints, strings.Join(constraint, " "))
 		} else if len(constraint) > 0 {
-			log.Fatal("invalid constraint")
+			err = fmt.Errorf("invalid constraint: %s", t.Peek())
+			return
 		} else {
 			column := ColumnDef{}
-			column.Name = t.MustGetIdentifier()
+			column.Name, err = t.MustGetIdentifier()
+			if err != nil {
+				return
+			}
 			typeTokens := []string{}
 			for !t.AtEnd() {
 				token := t.Peek()
@@ -69,7 +94,12 @@ func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constr
 					}
 					column.Constraints = append(column.Constraints, strings.Join(constraint, " "))
 				} else {
-					typeTokens = append(typeTokens, t.MustGetIdentifier())
+					var typeToken string
+					typeToken, err = t.MustGetIdentifier()
+					if err != nil {
+						return
+					}
+					typeTokens = append(typeTokens, typeToken)
 				}
 			}
 			column.Type = strings.Join(typeTokens, " ")
@@ -79,7 +109,10 @@ func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constr
 			columns = append(columns, column)
 		}
 		if !t.Match(",") {
-			t.MustMatch(")")
+			err = t.MustMatch(")")
+			if err != nil {
+				return
+			}
 			break
 		}
 	}
@@ -106,27 +139,58 @@ func parseCreateTable(sql string) (tableName string, columns []ColumnDef, constr
 	return
 }
 
-func parseCreateIndex(sql string) (indexName, tableName string, columns []ColumnDef) {
+func parseCreateIndex(sql string) (indexName, tableName string, columns []ColumnDef, err error) {
 	t := NewTokenizer(sql)
 	if t.AtEnd() {
 		return
 	}
-	t.MustMatch("CREATE")
-	t.Match("UNIQUE")
-	t.MustMatch("INDEX")
-	if t.Match("IF") {
-		t.MustMatch("NOT")
-		t.MustMatch("EXISTS")
+	err = t.MustMatch("CREATE")
+	if err != nil {
+		return
 	}
-	indexName = t.MustGetIdentifier()
-	t.MustMatch("ON")
-	tableName = t.MustGetIdentifier()
-	t.MustMatch("(")
+	t.Match("UNIQUE")
+	err = t.MustMatch("INDEX")
+	if err != nil {
+		return
+	}
+	if t.Match("IF") {
+		err = t.MustMatch("NOT")
+		if err != nil {
+			return
+		}
+		err = t.MustMatch("EXISTS")
+		if err != nil {
+			return
+		}
+	}
+	indexName, err = t.MustGetIdentifier()
+	if err != nil {
+		return
+	}
+	err = t.MustMatch("ON")
+	if err != nil {
+		return
+	}
+	tableName, err = t.MustGetIdentifier()
+	if err != nil {
+		return
+	}
+	err = t.MustMatch("(")
+	if err != nil {
+		return
+	}
 	for {
 		column := ColumnDef{}
-		column.Name = t.MustGetIdentifier()
+		column.Name, err = t.MustGetIdentifier()
+		if err != nil {
+			return
+		}
 		if t.Match("COLLATE") {
-			collationName := t.MustGetIdentifier()
+			var collationName string
+			collationName, err = t.MustGetIdentifier()
+			if err != nil {
+				return
+			}
 			column.Constraints = append(column.Constraints, "COLLATE", collationName)
 		}
 		if t.Match("DESC") {
@@ -137,47 +201,78 @@ func parseCreateIndex(sql string) (indexName, tableName string, columns []Column
 		}
 		columns = append(columns, column)
 		if !t.Match(",") {
-			t.MustMatch(")")
+			err = t.MustMatch(")")
+			if err != nil {
+				return
+			}
 			break
 		}
 	}
 	return
 }
 
-func parseSelectStatement(sql string) (tableName string, columns []string, filterColumnName string, filterValue any) {
+func parseSelectStatement(sql string) (tableName string, columns []string, filterColumnName string, filterValue any, err error) {
 	t := NewTokenizer(sql)
-	t.MustMatch("SELECT")
+	err = t.MustMatch("SELECT")
+	if err != nil {
+		return
+	}
 	for {
 		if t.Match("COUNT") {
-			t.MustMatch("(")
-			t.MustMatch("*")
-			t.MustMatch(")")
+			err = t.MustMatch("(")
+			if err != nil {
+				return
+			}
+			err = t.MustMatch("*")
+			if err != nil {
+				return
+			}
+			err = t.MustMatch(")")
+			if err != nil {
+				return
+			}
 			columns = append(columns, "COUNT(*)")
 		} else {
-			column := t.MustGetIdentifier()
+			var column string
+			column, err = t.MustGetIdentifier()
+			if err != nil {
+				return
+			}
 			columns = append(columns, column)
 		}
 		if !t.Match(",") {
 			break
 		}
 	}
-	t.MustMatch("FROM")
-	tableName = t.MustGetIdentifier()
+	err = t.MustMatch("FROM")
+	if err != nil {
+		return
+	}
+	tableName, err = t.MustGetIdentifier()
+	if err != nil {
+		return
+	}
 	if t.Match("WHERE") {
-		filterColumnName = t.MustGetIdentifier()
+		filterColumnName, err = t.MustGetIdentifier()
+		if err != nil {
+			return
+		}
 		t.MustMatch("=")
-		value := t.MustGetIdentifier()
+		var value string
+		value, err = t.MustGetIdentifier()
+		if err != nil {
+			return
+		}
 		if value[0] == '\'' {
 			filterValue = strings.Trim(value, "'")
 		} else {
-			var err error
 			filterValue, err = strconv.ParseInt(value, 10, 64)
 			if err != nil {
 				if _, isNumError := err.(*strconv.NumError); isNumError {
 					filterValue, err = strconv.ParseFloat(value, 64)
 				}
 				if err != nil {
-					log.Fatalf("error converting value %q: %v", value, err)
+					return
 				}
 			}
 		}

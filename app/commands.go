@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"slices"
 	"strings"
 )
@@ -70,9 +69,12 @@ func (db *DbContext) PrintSchema(writer io.Writer) {
 	}
 }
 
-func (db *DbContext) HandleSelect(query string, writer io.Writer) {
+func (db *DbContext) HandleSelect(query string, writer io.Writer) error {
 
-	queryTableName, queryColumnNames, filterColumnName, filterValue := parseSelectStatement(query)
+	queryTableName, queryColumnNames, filterColumnName, filterValue, err := parseSelectStatement(query)
+	if err != nil {
+		return err
+	}
 
 	rootPage := 0
 	var tableColumns []ColumnDef
@@ -80,7 +82,7 @@ func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 	if strings.EqualFold(queryTableName, "sqlite_schema") || strings.EqualFold(queryTableName, "sqlite_master") {
 		rootPage = 1
 		// sqlite_schema has no table definition - this is the one from the docs: https://www.sqlite.org/fileformat.html#storage_of_the_sql_database_schema
-		_, tableColumns, _ = parseCreateTable("CREATE TABLE sqlite_schema(type text, name text, tbl_name text, rootpage integer, sql text);")
+		_, tableColumns, _, _ = parseCreateTable("CREATE TABLE sqlite_schema(type text, name text, tbl_name text, rootpage integer, sql text);")
 	}
 
 	for _, entry := range db.Schema {
@@ -95,7 +97,7 @@ func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 	}
 
 	if rootPage == 0 {
-		log.Fatal("no such table:", queryTableName)
+		return fmt.Errorf("no such table: %s", queryTableName)
 	}
 
 	queryColumnNumbers := []int{}
@@ -107,7 +109,7 @@ func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 		if filterColumnName == "" {
 			rowCount := db.fastCountRows(rootPage)
 			fmt.Fprintln(writer, rowCount)
-			return
+			return nil
 		}
 	} else {
 		// replace "*" with the names for the table columns
@@ -127,7 +129,7 @@ func (db *DbContext) HandleSelect(query string, writer io.Writer) {
 					}
 				}
 				if !found {
-					log.Fatal("no such column: ", queryColumnName)
+					return fmt.Errorf("no such column: %s", queryColumnName)
 				}
 			}
 		}
@@ -162,7 +164,7 @@ outer:
 			}
 		}
 		if !found {
-			log.Fatal("no such column:", filterColumnName)
+			return fmt.Errorf("no such column: %s", filterColumnName)
 		}
 
 		for _, entry := range db.Schema {
@@ -179,7 +181,7 @@ outer:
 		// "without rowid" table?
 		if filterIndexPage == -1 {
 			for _, constraint := range tableColumns[filterColumnNumber].Constraints {
-				if strings.EqualFold(constraint, "PRIMARY") {
+				if strings.Contains(strings.ToUpper(constraint), "PRIMARY KEY") {
 					filterIndexPage = rootPage
 					break
 				}
@@ -240,4 +242,6 @@ outer:
 	if countingOnly {
 		fmt.Fprintln(writer, rowCount)
 	}
+
+	return nil
 }

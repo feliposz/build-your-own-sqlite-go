@@ -5,7 +5,7 @@ import (
 )
 
 func TestParseCreateIndex(t *testing.T) {
-	indexName, tableName, columns := parseCreateIndex("create index idx on tab (a, b desc, c asc)")
+	indexName, tableName, columns, _ := parseCreateIndex("create index idx on tab (a, b desc, c asc)")
 	if indexName != "idx" {
 		t.Errorf("expected index name: %q - got: %q\n", "idx", indexName)
 	}
@@ -25,7 +25,7 @@ func TestParseCreateIndex(t *testing.T) {
 }
 
 func TestParseSelectStatement(t *testing.T) {
-	tableName, columnNames, filterColumn, filterValue := parseSelectStatement("select a, b, c, *, count(*) from tab where x = '123'")
+	tableName, columnNames, filterColumn, filterValue, _ := parseSelectStatement("select a, b, c, *, count(*) from tab where x = '123'")
 	if tableName != "tab" {
 		t.Errorf("expected table name: %q - got: %q\n", "tab", tableName)
 	}

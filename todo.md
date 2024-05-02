@@ -5,7 +5,7 @@ Plans to extend the "sqlite clone":
 ## Basic querying:
 
 - [x] REPL
-  - [ ] proper error handling
+  - [x] ~~proper~~ better error handling
   - [ ] multi-line statements?
 - [ ] output modes (ex: box)
 - [ ] multiple filters on WHERE clause

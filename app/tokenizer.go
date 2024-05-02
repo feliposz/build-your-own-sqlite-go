@@ -1,8 +1,8 @@
 package main
 
 import (
+	"fmt"
 	"io"
-	"log"
 	"strings"
 	"unicode"
 )
@@ -154,11 +154,11 @@ func (t *Tokenizer) Match(s string) bool {
 	return false
 }
 
-func (t *Tokenizer) MustMatch(s string) {
+func (t *Tokenizer) MustMatch(s string) error {
 	if !t.Match(s) {
-		log.Printf("source: %q\n", t.Source)
-		log.Fatal("syntax error - expected: ", s)
+		return fmt.Errorf("syntax error near %q expected: %s", t.Peek(), s)
 	}
+	return nil
 }
 
 func (t *Tokenizer) Previous() string {
@@ -181,11 +181,11 @@ func (t *Tokenizer) Advance() {
 	}
 }
 
-func (t *Tokenizer) MustGetIdentifier() string {
+func (t *Tokenizer) MustGetIdentifier() (string, error) {
 	if t.AtEnd() {
-		log.Fatal("syntax error - expected identifier")
+		return "", fmt.Errorf("syntax error - expected identifier")
 	}
 	result := t.Peek()
 	t.Advance()
-	return result
+	return result, nil
 }

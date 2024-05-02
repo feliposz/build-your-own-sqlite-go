@@ -177,17 +177,24 @@ func (db *DbContext) readSchema() {
 		if sql, ok := row.Columns[4].(string); ok {
 			entry.SQL = sql
 		}
+		var err error
 		switch entry.Type {
 		case "table":
 			db.Info.NumberOfTables++
-			_, entry.Columns, entry.Constraints = parseCreateTable(entry.SQL)
+			_, entry.Columns, entry.Constraints, err = parseCreateTable(entry.SQL)
+			if err != nil {
+				log.Fatalf("error parsing schema for table %q: %v", entry.Name, err)
+			}
 		case "trigger":
 			db.Info.NumberOfTriggers++
 		case "view":
 			db.Info.NumberOfViews++
 		case "index":
 			db.Info.NumberOfIndexes++
-			_, _, entry.Columns = parseCreateIndex(entry.SQL)
+			_, _, entry.Columns, err = parseCreateIndex(entry.SQL)
+			if err != nil {
+				log.Fatalf("error parsing schema for index %q: %v", entry.Name, err)
+			}
 		}
 		schema = append(schema, entry)
 		schemaSize += len(entry.SQL)

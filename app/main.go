@@ -24,12 +24,16 @@ func main() {
 		repl(db)
 	} else {
 		for _, command := range os.Args[2:] {
-			execute(db, command)
+			err := execute(db, command)
+			if err != nil {
+				fmt.Println(err)
+				break
+			}
 		}
 	}
 }
 
-func execute(db *DbContext, command string) {
+func execute(db *DbContext, command string) error {
 	switch command {
 	case ".dbinfo":
 		db.PrintDbInfo(os.Stdout)
@@ -41,12 +45,15 @@ func execute(db *DbContext, command string) {
 		db.PrintSchema(os.Stdout)
 	default:
 		if strings.Contains(strings.ToUpper(command), "SELECT") {
-			db.HandleSelect(command, os.Stdout)
+			err := db.HandleSelect(command, os.Stdout)
+			if err != nil {
+				return err
+			}
 		} else {
-			fmt.Println("Unknown command", command)
-			os.Exit(1)
+			return fmt.Errorf("error: unknown command: %q", command)
 		}
 	}
+	return nil
 }
 
 func repl(db *DbContext) {
@@ -57,7 +64,10 @@ func repl(db *DbContext) {
 		if command == ".exit" {
 			break
 		}
-		execute(db, command)
+		err := execute(db, command)
+		if err != nil {
+			fmt.Println(err)
+		}
 		fmt.Print("> ")
 	}
 }
