@@ -9,7 +9,7 @@ import (
 
 func (db *DbContext) PrintDbInfo(writer io.Writer) {
 	info := db.Info
-	encodingDescription := "?"
+	encodingDescription := ""
 	switch info.TextEncoding {
 	case 1:
 		encodingDescription = " (utf8)"
