@@ -753,12 +753,13 @@ func (db *DbContext) getRecordByPK(page int, pkColumnNumber int, key any) *Table
 		lo, hi := 0, len(entries)-1
 		for lo <= hi {
 			mid := (lo + hi) / 2
-			columns := db.parseRecordFormat(entries[mid].keyPayload)
 			if mid == len(entries)-1 {
 				// right-most child
 				lo = mid
 				break
-			} else if compareAny(key, columns[pkColumnNumber]) == 0 {
+			}
+			columns := db.parseRecordFormat(entries[mid].keyPayload)
+			if compareAny(key, columns[pkColumnNumber]) == 0 {
 				return &TableRecord{Rowid: -1, Columns: columns}
 			} else if compareAny(key, columns[pkColumnNumber]) < 0 {
 				hi = mid - 1
