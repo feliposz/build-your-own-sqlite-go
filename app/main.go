@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -9,17 +10,26 @@ import (
 var debugMode bool
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Printf("usage: %s <database.db> <command>\n", os.Args[0])
+	if len(os.Args) < 2 {
+		fmt.Printf("usage: %s <database.db> [<command> ...]\n", os.Args[0])
 		os.Exit(1)
 	}
 
 	databaseFilePath := os.Args[1]
-	command := os.Args[2]
 
 	db := NewDbContext(databaseFilePath)
 	defer db.Close()
 
+	if len(os.Args) == 2 {
+		repl(db)
+	} else {
+		for _, command := range os.Args[2:] {
+			execute(db, command)
+		}
+	}
+}
+
+func execute(db *DbContext, command string) {
 	switch command {
 	case ".dbinfo":
 		db.PrintDbInfo(os.Stdout)
@@ -36,5 +46,18 @@ func main() {
 			fmt.Println("Unknown command", command)
 			os.Exit(1)
 		}
+	}
+}
+
+func repl(db *DbContext) {
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Print("> ")
+	for scanner.Scan() {
+		command := strings.TrimSpace(scanner.Text())
+		if command == ".exit" {
+			break
+		}
+		execute(db, command)
+		fmt.Print("> ")
 	}
 }

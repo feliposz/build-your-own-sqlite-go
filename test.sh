@@ -1,1 +1,1 @@
-go test -v app/*
+go test -v app/*.go
