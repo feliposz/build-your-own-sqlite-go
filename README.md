@@ -8,9 +8,6 @@ basic SQL queries by reading the raw [SQLite's file format](https://www.sqlite.o
 filtering using indexes and traversing the [stored B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
 structure and more.
 
-**Note**: Head over to
-[codecrafters.io](https://app.codecrafters.io/r/comfortable-squirrel-392164) to try the challenge yourself. Use [this link](https://app.codecrafters.io/r/comfortable-squirrel-392164) and get a [one-week free access](https://app.codecrafters.io/r/comfortable-squirrel-392164) (for you and for me too)!
-
 # Stages
 
 Final implementation passes all stages of [sqlite-tester v47](https://github.com/codecrafters-io/sqlite-tester/releases/tag/v47):
